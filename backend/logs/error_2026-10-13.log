@@ -1,0 +1,2 @@
+2026-10-13 22:31:42.557 | ERROR    | app.exceptions:app_exception_handler:149 | AppException | code=UNAUTHORIZED | status=401 | path=/api/auth/login | message=Invalid username or password | details=None
+2026-10-13 22:32:11.566 | ERROR    | app.exceptions:app_exception_handler:149 | AppException | code=UNAUTHORIZED | status=401 | path=/api/auth/login | message=Invalid username or password | details=None

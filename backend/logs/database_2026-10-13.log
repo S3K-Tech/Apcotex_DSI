@@ -1,0 +1,5 @@
+2026-10-13 17:29:13.509 | INFO     | app.database.session:check_database_connection:65 | Database connection successful
+2026-10-13 17:31:01.299 | INFO     | app.database.session:check_database_connection:65 | Database connection successful
+2026-10-13 22:30:58.409 | INFO     | app.database.session:check_database_connection:65 | Database connection successful
+2026-10-13 22:31:42.557 | WARNING  | app.database.session:get_db:52 | Database session rolled back | reason=Invalid username or password
+2026-10-13 22:32:11.560 | WARNING  | app.database.session:get_db:52 | Database session rolled back | reason=Invalid username or password

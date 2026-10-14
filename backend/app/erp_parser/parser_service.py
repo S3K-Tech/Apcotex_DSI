@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.logging import get_logger
 from app.erp_parser.confidence import compute_erp_confidence
+from app.erp_parser.documents.row_quarters import subject_fiscal_year_start
 from app.erp_parser.header_mapper import FIELD_DISPLAY, is_month_header, normalize_header_text
 from app.erp_parser.llm_header_resolver import (
     LLMHeaderResolver,
@@ -222,6 +223,7 @@ class ERPParserService:
         from app.erp_parser.documents.pipeline import orchestrator_workbook
         from app.erp_parser.orchestrator.service import UniversalParserOrchestrator
 
+        fiscal_year_start = subject_fiscal_year_start(subject) or fiscal_year_start
         with orchestrator_workbook(path) as opened:
             result = UniversalParserOrchestrator(self).parse(
                 opened.workbook_path,

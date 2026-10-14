@@ -17,6 +17,7 @@ from app.schemas.erp_parse import (
     ERPImportRequest,
     ERPImportResponse,
     ERPParsePreviewResponse,
+    ERPReviewDecisionRequest,
 )
 from app.services.erp_ingest_service import ERPIngestService
 from app.utils.files import get_upload_subdir, save_upload_file
@@ -200,3 +201,42 @@ def skip_erp_email(
     _ensure_email_access(current, db, email, check_segment=False)
     service.skip_email(email_id, actor=current.name)
     return MessageResponse(message=f"Email {email_id} skipped")
+
+
+@router.get(
+    "/emails/{email_id}/review-summary",
+    response_model=DataResponse[Dict[str, Any]],
+    summary="Existing vs incoming segment for a Human Review email",
+)
+def review_summary(
+    email_id: int,
+    current: RequireUser,
+    service: ERPIngestService = Depends(_erp_service),
+    db: Session = Depends(get_db),
+) -> DataResponse[Dict[str, Any]]:
+    email = service.emails.get_or_raise(email_id)
+    _ensure_email_access(current, db, email, check_segment=True)
+    return DataResponse(data=service.review_summary(email_id), message="Review summary")
+
+
+@router.post(
+    "/emails/{email_id}/review-decision",
+    response_model=DataResponse[Dict[str, Any]],
+    summary="Resolve Human Review: ADD this segment or DELETE the incoming data",
+)
+def review_decision(
+    email_id: int,
+    payload: ERPReviewDecisionRequest,
+    current: RequireUser,
+    service: ERPIngestService = Depends(_erp_service),
+    db: Session = Depends(get_db),
+) -> DataResponse[Dict[str, Any]]:
+    email = service.emails.get_or_raise(email_id)
+    _ensure_email_access(current, db, email, check_segment=True)
+    result = service.resolve_review(email_id, action=payload.action, actor=current.name)
+    message = (
+        "Incoming data rejected. Existing data kept."
+        if result["action"] == "DELETE"
+        else f"Added {result['records_inserted']} sales rows"
+    )
+    return DataResponse(data=result, message=message)

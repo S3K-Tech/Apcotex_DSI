@@ -37,6 +37,24 @@ export const AuditTrailService = {
     }
   },
 
+  /** GET /api/audit-trail/purge-preview?before=YYYY-MM-DD */
+  purgePreview: async (before: string): Promise<{ before: string; count: number }> => {
+    const res = await apiRequest<{ success: boolean; data: { before: string; count: number } }>(
+      '/audit-trail/purge-preview',
+      { params: { before } },
+    );
+    return res.data;
+  },
+
+  /** POST /api/audit-trail/purge */
+  purge: async (before: string): Promise<{ before: string; deleted: number }> => {
+    const res = await apiRequest<{ success: boolean; data: { before: string; deleted: number } }>(
+      '/audit-trail/purge',
+      { method: 'POST', body: { before } },
+    );
+    return res.data;
+  },
+
   /** GET /api/audit-trail/export — download Excel with current filters */
   exportExcel: async (query: AuditTrailQuery = {}): Promise<void> => {
     const params = new URLSearchParams();

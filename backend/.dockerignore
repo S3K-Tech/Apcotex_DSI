@@ -1,8 +1,16 @@
 venv
+.venv
 __pycache__
+*.pyc
+*.pyo
 .pytest_cache
 .git
+.gitignore
 uploads
+downloads
 logs
+*.log
+tests
+testbedrock.py
 .env
 .env.*

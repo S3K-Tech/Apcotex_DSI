@@ -3,7 +3,7 @@
 from datetime import date, datetime, time, timezone
 from typing import List, Optional
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit_trail import AuditTrail
@@ -113,3 +113,22 @@ class AuditTrailRepository(BaseRepository[AuditTrail]):
         )
         query = select(func.count()).select_from(filtered.subquery())
         return int(self.db.scalar(query) or 0)
+
+    def count_before(self, cutoff: datetime) -> int:
+        """Entries created strictly before ``cutoff``."""
+        return int(
+            self.db.scalar(
+                select(func.count(AuditTrail.id)).where(AuditTrail.created_at < cutoff)
+            )
+            or 0
+        )
+
+    def delete_before(self, cutoff: datetime) -> int:
+        """Hard-delete entries created strictly before ``cutoff``. Admin retention purge only."""
+        result = self.db.execute(
+            delete(AuditTrail)
+            .where(AuditTrail.created_at < cutoff)
+            .execution_options(synchronize_session=False)
+        )
+        self.db.flush()
+        return int(result.rowcount or 0)

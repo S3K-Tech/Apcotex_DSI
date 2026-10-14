@@ -104,6 +104,9 @@ class PreviewMixin:
         from app.utils.email_subject_parser import try_parse_email_subject
 
         subject_meta = try_parse_email_subject(email.subject) or {}
+        from app.erp_parser.documents.row_quarters import subject_fiscal_year_start
+
+        fiscal_year_start = subject_fiscal_year_start(email.subject) or fiscal_year_start
         preferred_parser, known_fingerprint = self._preferred_parser_pair(email)
         known_profiles = self._known_profiles(email)
         merged_rows: List[Dict[str, Any]] = []

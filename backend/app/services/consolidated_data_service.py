@@ -2,6 +2,7 @@
 
 from collections import OrderedDict
 from datetime import date
+from decimal import Decimal
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,7 @@ from app.schemas.sales_record import (
     DeleteResult,
     PeriodSummaryItem,
     ReportSalesGroup,
+    ReportSegmentGroup,
     SalesLineItem,
 )
 from app.services.audit_service import AuditService
@@ -424,6 +426,11 @@ class ConsolidatedDataService:
                     validationMessage=validation_message,
                     sales=[],
                 )
+            mt = quantity_as_mt(
+                record.quantity,
+                unit=getattr(record, "unit", None),
+                original_unit=getattr(record, "original_unit", None),
+            )
             line = SalesLineItem(
                 id=record.id,
                 srNo=record.sr_no or (base_idx + i + 1),
@@ -431,19 +438,29 @@ class ConsolidatedDataService:
                 segment=record.segment,
                 location=(getattr(record, "location", None) or "").strip(),
                 product=record.product,
-                quantity=format_mt(
-                    quantity_as_mt(
-                        record.quantity,
-                        unit=getattr(record, "unit", None),
-                        original_unit=getattr(record, "original_unit", None),
-                    )
-                ),
+                quantity=format_mt(mt),
             )
-            groups[report_id].sales.append(line)
-            groups[report_id].recordCount = len(groups[report_id].sales)
+            group = groups[report_id]
+            group.sales.append(line)
+            group.recordCount = len(group.sales)
             # Prefer first non-empty location as report-level label
-            if not groups[report_id].location:
+            if not group.location:
                 loc = (getattr(record, "location", None) or "").strip()
                 if loc:
-                    groups[report_id].location = loc
+                    group.location = loc
+            seg_name = (line.segment or "").strip()
+            slice_ = next(
+                (
+                    s
+                    for s in group.segments
+                    if s.segment.casefold() == seg_name.casefold()
+                    and s.location.casefold() == line.location.casefold()
+                ),
+                None,
+            )
+            if slice_ is None:
+                slice_ = ReportSegmentGroup(segment=seg_name, location=line.location)
+                group.segments.append(slice_)
+            slice_.recordCount += 1
+            slice_.quantityMt = round_mt(Decimal(str(slice_.quantityMt)) + Decimal(str(mt or 0)))
         return list(groups.values())

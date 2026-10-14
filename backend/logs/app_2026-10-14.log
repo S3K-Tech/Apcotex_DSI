@@ -1,0 +1,75 @@
+2026-10-14 12:20:46.115 | INFO     | app.core.logging:setup_logging:94 | Logging initialized | env=development | level=INFO
+2026-10-14 12:20:46.118 | INFO     | app.main:lifespan:68 | Starting APCOTEX Sales Insights API v1.0.0 | env=development | host=0.0.0.0:8000
+2026-10-14 12:20:46.179 | INFO     | app.database.session:check_database_connection:65 | Database connection successful
+2026-10-14 12:20:46.179 | INFO     | app.main:lifespan:77 | Database connectivity verified
+2026-10-14 12:20:46.191 | INFO     | app.main:lifespan:82 | CORS allow_origins | ['http://localhost:5173', 'http://127.0.0.1:5173']
+2026-10-14 12:20:46.191 | INFO     | app.main:lifespan:85 | Auth configuration | AUTH_MODE=headers | production=False | trusted_secret_set=False | jwt_secret_set=False
+2026-10-14 12:20:46.237 | INFO     | app.services.outlook_auto_sync_scheduler:start_outlook_auto_sync_scheduler:193 | APScheduler Outlook auto-sync started | interval=30m
+2026-10-14 12:22:34.810 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=bdf60cc1-e1e9-475f-8e92-75b6f9b5d912 | method=OPTIONS | path=/api/auth/login
+2026-10-14 12:22:34.812 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=bdf60cc1-e1e9-475f-8e92-75b6f9b5d912 | method=OPTIONS | path=/api/auth/login | status=200 | elapsed_ms=1.80
+2026-10-14 12:22:34.812 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=ee386769-583b-4e1f-b300-24ff54aaff81 | method=POST | path=/api/auth/login
+2026-10-14 12:22:35.644 | INFO     | app.services.audit_service:log:104 | Audit | action=Login | module=Authentication | status=Info | user=Mr. Debrabata | role=admin
+2026-10-14 12:22:35.644 | INFO     | app.services.auth_service:login:111 | Login success | username=admin role=admin
+2026-10-14 12:22:35.650 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=ee386769-583b-4e1f-b300-24ff54aaff81 | method=POST | path=/api/auth/login | status=200 | elapsed_ms=834.87
+2026-10-14 12:22:35.739 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=45dfa639-0053-426e-b516-7780e1bbf06b | method=OPTIONS | path=/api/dashboard/summary
+2026-10-14 12:22:35.741 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=45dfa639-0053-426e-b516-7780e1bbf06b | method=OPTIONS | path=/api/dashboard/summary | status=200 | elapsed_ms=1.59
+2026-10-14 12:22:35.743 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=20d90293-748a-4326-b226-dd477e00e585 | method=GET | path=/api/dashboard/summary
+2026-10-14 12:22:35.901 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=20d90293-748a-4326-b226-dd477e00e585 | method=GET | path=/api/dashboard/summary | status=200 | elapsed_ms=161.71
+2026-10-14 12:22:40.029 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=176a7633-43e0-42d8-a870-a6c7574ff51a | method=OPTIONS | path=/api/consolidated-data/records
+2026-10-14 12:22:40.035 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=176a7633-43e0-42d8-a870-a6c7574ff51a | method=OPTIONS | path=/api/consolidated-data/records | status=200 | elapsed_ms=6.13
+2026-10-14 12:22:40.035 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=92e22997-a74c-4b5f-93a2-3c4525523d54 | method=OPTIONS | path=/api/consolidated-data/filter-options
+2026-10-14 12:22:40.040 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=3fe6c0ec-3939-4016-aebd-10179d3a13e5 | method=GET | path=/api/consolidated-data/records
+2026-10-14 12:22:40.041 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=92e22997-a74c-4b5f-93a2-3c4525523d54 | method=OPTIONS | path=/api/consolidated-data/filter-options | status=200 | elapsed_ms=4.57
+2026-10-14 12:22:40.049 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=c302c1d9-9387-49c4-a23c-00b135c5364b | method=GET | path=/api/consolidated-data/filter-options
+2026-10-14 12:22:40.222 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=3fe6c0ec-3939-4016-aebd-10179d3a13e5 | method=GET | path=/api/consolidated-data/records | status=200 | elapsed_ms=181.63
+2026-10-14 12:22:40.257 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=c302c1d9-9387-49c4-a23c-00b135c5364b | method=GET | path=/api/consolidated-data/filter-options | status=200 | elapsed_ms=215.30
+2026-10-14 12:22:54.761 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=a4c13816-3dfa-4ae3-90fd-2ae4f2503db9 | method=OPTIONS | path=/api/audit-trail/events
+2026-10-14 12:22:54.765 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=a4c13816-3dfa-4ae3-90fd-2ae4f2503db9 | method=OPTIONS | path=/api/audit-trail/events | status=200 | elapsed_ms=3.13
+2026-10-14 12:22:54.770 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=641f6882-e091-4386-9b87-f5293ee72abc | method=POST | path=/api/audit-trail/events
+2026-10-14 12:22:54.799 | INFO     | app.services.audit_service:log:104 | Audit | action=Admin Logout | module=Authentication | status=Info | user=Mr. Debrabata | role=admin
+2026-10-14 12:22:54.804 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=641f6882-e091-4386-9b87-f5293ee72abc | method=POST | path=/api/audit-trail/events | status=200 | elapsed_ms=33.43
+2026-10-14 12:23:12.971 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=e161540f-e14a-4162-a972-0cb61b85505e | method=OPTIONS | path=/api/auth/login
+2026-10-14 12:23:12.973 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=e161540f-e14a-4162-a972-0cb61b85505e | method=OPTIONS | path=/api/auth/login | status=200 | elapsed_ms=1.93
+2026-10-14 12:23:12.978 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=13253a49-da41-4959-accc-232867a80c3a | method=POST | path=/api/auth/login
+2026-10-14 12:23:13.684 | INFO     | app.services.audit_service:log:104 | Audit | action=Login | module=Authentication | status=Info | user=Super Admin | role=super_admin
+2026-10-14 12:23:13.692 | INFO     | app.services.auth_service:login:111 | Login success | username=superadmin role=super_admin
+2026-10-14 12:23:13.706 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=13253a49-da41-4959-accc-232867a80c3a | method=POST | path=/api/auth/login | status=200 | elapsed_ms=727.17
+2026-10-14 12:23:13.737 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=d16283b4-4ec1-432d-9e8e-06e0edaedf29 | method=OPTIONS | path=/api/consolidated-data/records
+2026-10-14 12:23:13.744 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=d16283b4-4ec1-432d-9e8e-06e0edaedf29 | method=OPTIONS | path=/api/consolidated-data/records | status=200 | elapsed_ms=7.19
+2026-10-14 12:23:13.759 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=8abc1353-ec71-4072-b3cc-2482da16edd3 | method=OPTIONS | path=/api/consolidated-data/filter-options
+2026-10-14 12:23:13.770 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=4def5d1a-29db-4f4d-86eb-63ef810b2df0 | method=GET | path=/api/consolidated-data/records
+2026-10-14 12:23:13.780 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=8abc1353-ec71-4072-b3cc-2482da16edd3 | method=OPTIONS | path=/api/consolidated-data/filter-options | status=200 | elapsed_ms=20.85
+2026-10-14 12:23:13.794 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=aabdd522-fdcb-487f-af85-5c9c99b74e80 | method=GET | path=/api/consolidated-data/filter-options
+2026-10-14 12:23:13.924 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=aabdd522-fdcb-487f-af85-5c9c99b74e80 | method=GET | path=/api/consolidated-data/filter-options | status=200 | elapsed_ms=140.78
+2026-10-14 12:23:13.924 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=4def5d1a-29db-4f4d-86eb-63ef810b2df0 | method=GET | path=/api/consolidated-data/records | status=200 | elapsed_ms=166.35
+2026-10-14 12:23:17.239 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=4910fbd6-643e-408e-9da6-df106a79523c | method=OPTIONS | path=/api/normalization/product-mappings
+2026-10-14 12:23:17.246 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=4910fbd6-643e-408e-9da6-df106a79523c | method=OPTIONS | path=/api/normalization/product-mappings | status=200 | elapsed_ms=1.51
+2026-10-14 12:23:17.249 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=6e32f03b-9a3f-4f55-b889-457292128bc6 | method=GET | path=/api/normalization/product-mappings
+2026-10-14 12:23:17.274 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=6e32f03b-9a3f-4f55-b889-457292128bc6 | method=GET | path=/api/normalization/product-mappings | status=200 | elapsed_ms=24.96
+2026-10-14 12:23:26.449 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=b5c7f22d-84ac-4909-a702-82816f541593 | method=OPTIONS | path=/api/settings/llm
+2026-10-14 12:23:26.451 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=5c936d23-fef9-4adf-b4af-91ea1ff2aa1b | method=OPTIONS | path=/api/settings/llm/usage
+2026-10-14 12:23:26.452 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=b5c7f22d-84ac-4909-a702-82816f541593 | method=OPTIONS | path=/api/settings/llm | status=200 | elapsed_ms=3.55
+2026-10-14 12:23:26.455 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=5c936d23-fef9-4adf-b4af-91ea1ff2aa1b | method=OPTIONS | path=/api/settings/llm/usage | status=200 | elapsed_ms=5.04
+2026-10-14 12:23:26.468 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=068431ff-3841-4dae-ae71-b1a41708614e | method=GET | path=/api/settings/llm
+2026-10-14 12:23:26.470 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=06a8a059-eb4b-435a-b0b0-21afbadf0e9f | method=GET | path=/api/settings/llm/usage
+2026-10-14 12:23:26.507 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=068431ff-3841-4dae-ae71-b1a41708614e | method=GET | path=/api/settings/llm | status=200 | elapsed_ms=39.88
+2026-10-14 12:23:26.516 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=06a8a059-eb4b-435a-b0b0-21afbadf0e9f | method=GET | path=/api/settings/llm/usage | status=200 | elapsed_ms=45.66
+2026-10-14 12:23:36.203 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=8fd419f1-f6f7-4017-ac25-c5c85806cba6 | method=OPTIONS | path=/api/dashboard/summary
+2026-10-14 12:23:36.203 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=8fd419f1-f6f7-4017-ac25-c5c85806cba6 | method=OPTIONS | path=/api/dashboard/summary | status=200 | elapsed_ms=1.22
+2026-10-14 12:23:36.209 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=5dcb5039-bc08-41b5-8907-678d416ab60f | method=GET | path=/api/dashboard/summary
+2026-10-14 12:23:36.276 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=5dcb5039-bc08-41b5-8907-678d416ab60f | method=GET | path=/api/dashboard/summary | status=200 | elapsed_ms=76.46
+2026-10-14 12:23:40.453 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=07a69142-7dd2-4cef-9a58-5bca6563f5cc | method=OPTIONS | path=/api/emails
+2026-10-14 12:23:40.461 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=07a69142-7dd2-4cef-9a58-5bca6563f5cc | method=OPTIONS | path=/api/emails | status=200 | elapsed_ms=7.11
+2026-10-14 12:23:40.463 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=0e94dbff-9d1d-4d98-8a08-6e6e891b1918 | method=OPTIONS | path=/api/outlook/sync/status
+2026-10-14 12:23:40.468 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=54aee2f0-9823-499a-8387-fad087c5260a | method=GET | path=/api/emails
+2026-10-14 12:23:40.469 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=0e94dbff-9d1d-4d98-8a08-6e6e891b1918 | method=OPTIONS | path=/api/outlook/sync/status | status=200 | elapsed_ms=5.46
+2026-10-14 12:23:40.476 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=fa42ba32-d9d4-44cf-b30c-2e8606907344 | method=GET | path=/api/outlook/sync/status
+2026-10-14 12:23:40.505 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=fa42ba32-d9d4-44cf-b30c-2e8606907344 | method=GET | path=/api/outlook/sync/status | status=200 | elapsed_ms=27.61
+2026-10-14 12:23:40.510 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=54aee2f0-9823-499a-8387-fad087c5260a | method=GET | path=/api/emails | status=200 | elapsed_ms=46.31
+2026-10-14 12:23:42.224 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=569ff2cd-9381-4567-944f-9be09c94f6d3 | method=OPTIONS | path=/api/audit-trail/events
+2026-10-14 12:23:42.227 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=569ff2cd-9381-4567-944f-9be09c94f6d3 | method=OPTIONS | path=/api/audit-trail/events | status=200 | elapsed_ms=2.15
+2026-10-14 12:23:42.231 | INFO     | app.middleware.request_logging:dispatch:23 | API request | id=d9930707-ac32-48ce-aabe-d84449179f21 | method=POST | path=/api/audit-trail/events
+2026-10-14 12:23:42.246 | INFO     | app.services.audit_service:log:104 | Audit | action=Super Admin Logout | module=Authentication | status=Info | user=Super Admin | role=super_admin
+2026-10-14 12:23:42.255 | INFO     | app.middleware.request_logging:dispatch:44 | API response | id=d9930707-ac32-48ce-aabe-d84449179f21 | method=POST | path=/api/audit-trail/events | status=200 | elapsed_ms=23.95
+2026-10-14 12:23:48.916 | INFO     | app.services.outlook_auto_sync_scheduler:stop_outlook_auto_sync_scheduler:208 | APScheduler Outlook auto-sync stopped
+2026-10-14 12:23:48.916 | INFO     | app.main:lifespan:113 | Shutting down APCOTEX Sales Insights API

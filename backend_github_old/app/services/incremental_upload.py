@@ -1,0 +1,375 @@
+"""Row-level comparison of a parsed upload against consolidated sales.
+
+Identity is distributor, location, segment, customer, product, transaction date,
+and financial year. Quantity is not part of the identity. Outlook Sync does not
+call this module.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.core.logging import get_logger
+from app.models.report import Report
+from app.models.sales_record import SalesRecord
+from app.utils.period_calendar import (
+    fy_short_display,
+    month_label,
+    parse_month_label,
+    parse_quarter_label,
+)
+
+logger = get_logger(__name__)
+
+NEW = "new"
+EXACT = "exact"
+MODIFIED = "modified"
+REPLACE = "replace"
+KEEP = "keep"
+ADD = "add"
+_ACTIONS = {REPLACE, KEEP, ADD}
+CONFIRM_ADD_MESSAGE = (
+    "Some records for this distributor/period already exist. Do you want to add the new records?"
+)
+
+
+def financial_year_of(period: str) -> str:
+    spec = parse_quarter_label(period or "")
+    if spec and spec.year:
+        return fy_short_display(spec.year)
+    return (period or "").strip()
+
+
+def transaction_date_of(row: Mapping[str, Any]) -> str:
+    """Calendar month/date key for monthly sales identity.
+
+    Never falls back to FY quarter/period labels — that wrongly collapses
+    June/July/August (same customer+product+qty) into one duplicate.
+    """
+    source = str(row.get("source_month") or "").strip()
+    if source:
+        parsed = parse_month_label(source)
+        if parsed:
+            return month_label(parsed[0], parsed[1])
+        return source
+
+    for key in ("transaction_date", "date", "invoice_date", "voucher_date"):
+        raw = row.get(key)
+        if raw is None or raw == "":
+            continue
+        text = str(raw).strip()
+        month_hit = parse_month_label(text)
+        if month_hit:
+            return month_label(month_hit[0], month_hit[1])
+        # ISO or day-month-year → calendar month label
+        try:
+            from datetime import date, datetime
+
+            if isinstance(raw, datetime):
+                return month_label(raw.month, raw.year)
+            if isinstance(raw, date):
+                return month_label(raw.month, raw.year)
+        except Exception:
+            pass
+        import re
+
+        iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})", text)
+        if iso:
+            return month_label(int(iso.group(2)), int(iso.group(1)))
+        named = re.match(
+            r"^(\d{1,2})[-/\s.]([A-Za-z]{3,9})[-/\s.](\d{2,4})$",
+            text,
+        )
+        if named:
+            months = {
+                "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+                "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+                "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+                "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+            }
+            month = months.get(named.group(2).lower()[:3]) or months.get(named.group(2).lower())
+            year = int(named.group(3))
+            if year < 100:
+                year += 2000
+            if month:
+                return month_label(month, year)
+    return ""
+
+
+def _qty(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value if value is not None else 0)).quantize(Decimal("0.001"))
+    except Exception:
+        return Decimal("0.000")
+
+
+def _identity(
+    customer: str,
+    product: str,
+    when: str,
+    financial_year: str,
+    location: str = "",
+    segment: str = "",
+) -> tuple:
+    return (
+        customer.strip().casefold(),
+        product.strip().casefold(),
+        when.strip().casefold(),
+        financial_year.strip().casefold(),
+        location.strip().casefold(),
+        segment.strip().casefold(),
+    )
+
+
+def load_existing(
+    db: Session,
+    distributor_id: int,
+    *,
+    location: str = "",
+    segment: str = "",
+) -> List[Dict[str, Any]]:
+    """Active consolidated rows for one distributor + location + segment slice."""
+    filters = [
+        SalesRecord.is_deleted.is_(False),
+        Report.is_deleted.is_(False),
+        SalesRecord.distributor_id == distributor_id,
+    ]
+    if (location or "").strip():
+        filters.append(
+            func.lower(func.trim(SalesRecord.location)) == location.strip().lower()
+        )
+    if (segment or "").strip():
+        filters.append(
+            func.lower(func.trim(SalesRecord.segment)) == segment.strip().lower()
+        )
+    rows = db.execute(
+        select(
+            SalesRecord.id,
+            SalesRecord.customer_name,
+            SalesRecord.product,
+            SalesRecord.quantity,
+            SalesRecord.source_month,
+            SalesRecord.period,
+            SalesRecord.location,
+            SalesRecord.segment,
+        )
+        .join(Report, Report.id == SalesRecord.report_id)
+        .where(*filters)
+    ).all()
+    loaded: List[Dict[str, Any]] = []
+    for record_id, customer, product, quantity, source_month, period, loc, seg in rows:
+        loaded.append(
+            {
+                "id": int(record_id),
+                "customer_name": customer or "",
+                "product": product or "",
+                "quantity": quantity,
+                "source_month": source_month or "",
+                "period": period or "",
+                "location": loc or "",
+                "segment": seg or "",
+            }
+        )
+    return loaded
+
+
+def analyse_rows(
+    incoming: Sequence[Mapping[str, Any]],
+    existing: Sequence[Mapping[str, Any]],
+    *,
+    location: str = "",
+    segment: str = "",
+) -> Dict[str, Any]:
+    """Classify every incoming row. Modified rows are the only ones returned in full."""
+    scope_location = (location or "").strip()
+    scope_segment = (segment or "").strip()
+    index: Dict[tuple, Dict[str, Any]] = {}
+    for row in existing:
+        period = str(row.get("period") or "")
+        key = _identity(
+            str(row.get("customer_name") or ""),
+            str(row.get("product") or ""),
+            transaction_date_of(row),
+            financial_year_of(period),
+            str(row.get("location") or scope_location),
+            str(row.get("segment") or scope_segment),
+        )
+        current = index.get(key)
+        if current is None or int(row.get("id") or 0) >= int(current.get("id") or 0):
+            index[key] = dict(row)
+
+    classified: List[Dict[str, Any]] = []
+    modified_rows: List[Dict[str, Any]] = []
+    for offset, row in enumerate(incoming):
+        customer = str(row.get("customer_name") or row.get("customer") or "").strip()
+        product = str(row.get("product") or "").strip()
+        period = str(row.get("period") or row.get("reporting_quarter") or "").strip()
+        when = transaction_date_of(row)
+        row_location = str(row.get("location") or scope_location).strip()
+        row_segment = str(row.get("segment") or scope_segment).strip()
+        incoming_qty = _qty(
+            row.get("sales_quantity") if row.get("sales_quantity") is not None else row.get("quantity")
+        )
+        key = _identity(
+            customer,
+            product,
+            when,
+            financial_year_of(period),
+            row_location,
+            row_segment,
+        )
+        found = index.get(key)
+        if found is None:
+            kind = NEW
+            existing_qty = None
+            existing_id = None
+        else:
+            existing_qty = _qty(found.get("quantity"))
+            existing_id = int(found["id"])
+            kind = EXACT if existing_qty == incoming_qty else MODIFIED
+        item = {
+            "row_index": offset,
+            "kind": kind,
+            "customer": customer,
+            "product": product,
+            "date": when or period,
+            "period": period,
+            "location": row_location,
+            "segment": row_segment,
+            "existing_id": existing_id,
+            "existing_qty": float(existing_qty) if existing_qty is not None else None,
+            "incoming_qty": float(incoming_qty),
+        }
+        classified.append(item)
+        if kind == MODIFIED and existing_qty is not None:
+            modified_rows.append(
+                {
+                    "row_index": offset,
+                    "customer": customer,
+                    "product": product,
+                    "date": when or period,
+                    "existing_qty": float(existing_qty),
+                    "incoming_qty": float(incoming_qty),
+                    "difference": float(incoming_qty - existing_qty),
+                    "existing_id": existing_id,
+                }
+            )
+
+    new_count = sum(1 for item in classified if item["kind"] == NEW)
+    exact_count = sum(1 for item in classified if item["kind"] == EXACT)
+    modified_count = len(modified_rows)
+    if new_count == 0 and exact_count and modified_count == 0:
+        status = "duplicate_upload"
+        recommendation = "Duplicate upload. No records will be inserted."
+    elif exact_count or modified_count:
+        status = "confirm_add"
+        recommendation = CONFIRM_ADD_MESSAGE
+    else:
+        status = "ready"
+        recommendation = f"Import {new_count} new records."
+    payload = {
+        "analysed": len(classified),
+        "new_count": new_count,
+        "exact_count": exact_count,
+        "modified_count": modified_count,
+        "status": status,
+        "recommendation": recommendation,
+        "modified_rows": modified_rows,
+        "rows": classified,
+    }
+    logger.info(
+        "Incremental analysis | analysed={} | new={} | exact={} | modified={} | status={} | location={} | segment={}",
+        payload["analysed"],
+        new_count,
+        exact_count,
+        modified_count,
+        status,
+        scope_location,
+        scope_segment,
+    )
+    return payload
+
+
+def decision_map(decisions: Optional[Iterable[Mapping[str, Any]]]) -> Dict[int, str]:
+    mapped: Dict[int, str] = {}
+    for item in decisions or []:
+        try:
+            index = int(item.get("row_index"))
+        except (TypeError, ValueError):
+            continue
+        action = str(item.get("action") or "").strip().lower()
+        if action in _ACTIONS:
+            mapped[index] = action
+    return mapped
+
+
+def needs_review(
+    plan: Mapping[str, Any],
+    decisions: Optional[Iterable[Mapping[str, Any]]],
+    *,
+    confirm_add: bool = False,
+) -> bool:
+    """True when existing rows overlap and the user has not confirmed Add yet."""
+    if confirm_add:
+        return False
+    chosen = decision_map(decisions)
+    if chosen:
+        for row in plan.get("modified_rows") or []:
+            if chosen.get(int(row["row_index"])) not in _ACTIONS:
+                return True
+        return False
+    status = str(plan.get("status") or "")
+    return status in {"confirm_add", "human_review"}
+
+
+def rows_for_insert(
+    incoming: Sequence[Mapping[str, Any]],
+    plan: Mapping[str, Any],
+    decisions: Optional[Iterable[Mapping[str, Any]]],
+    *,
+    confirm_add: bool = False,
+) -> List[Dict[str, Any]]:
+    """New rows, plus modified rows the reviewer chose to add as a new version."""
+    chosen = decision_map(decisions)
+    selected: List[Dict[str, Any]] = []
+    for item in plan.get("rows") or []:
+        kind = item["kind"]
+        index = int(item["row_index"])
+        if kind == NEW:
+            selected.append(dict(incoming[index]))
+        elif kind == MODIFIED and not confirm_add and chosen.get(index) == ADD:
+            selected.append(dict(incoming[index]))
+    return selected
+
+
+def rows_for_replace(
+    plan: Mapping[str, Any],
+    decisions: Optional[Iterable[Mapping[str, Any]]],
+    *,
+    confirm_add: bool = False,
+) -> List[Dict[str, Any]]:
+    if confirm_add:
+        return []
+    chosen = decision_map(decisions)
+    return [
+        row
+        for row in (plan.get("modified_rows") or [])
+        if chosen.get(int(row["row_index"])) == REPLACE
+    ]
+
+
+def public_plan(plan: Mapping[str, Any]) -> Dict[str, Any]:
+    """Drop the full classified list. The reviewer sees modified rows only."""
+    return {
+        "analysed": int(plan.get("analysed") or 0),
+        "new_count": int(plan.get("new_count") or 0),
+        "exact_count": int(plan.get("exact_count") or 0),
+        "modified_count": int(plan.get("modified_count") or 0),
+        "status": str(plan.get("status") or "ready"),
+        "recommendation": str(plan.get("recommendation") or ""),
+        "modified_rows": list(plan.get("modified_rows") or []),
+    }

@@ -217,6 +217,7 @@ def extract_product_month_matrix_rows(
     from decimal import Decimal
 
     from app.erp_parser.fiscal_quarters import (
+        header_fy_start,
         month_key_to_quarter,
         quarter_label,
         resolve_fy_start_year,
@@ -243,7 +244,9 @@ def extract_product_month_matrix_rows(
     header_idx = int(layout["header_row_index"])
     customer_col = int(layout["customer_col"])
     groups = list(layout.get("groups") or [])
-    fy_start = resolve_fy_start_year(
+    fy_start = header_fy_start(
+        [lab for g in groups for _c, lab, _key in g.get("month_columns") or []]
+    ) or resolve_fy_start_year(
         fiscal_year_start=fiscal_year_start,
         reporting_quarter=reporting_quarter,
     )

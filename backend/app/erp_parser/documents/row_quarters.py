@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.utils.period_calendar import (
     fy_quarter_label,
+    fy_short_display,
     fy_start_for_calendar_month,
     month_label,
     parse_month_label,
@@ -29,6 +30,7 @@ _MONTHS = {
     "nov": 11,
     "dec": 12,
 }
+_ISO_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})")
 _TOKEN_RE = re.compile(
     r"(\d{1,2})[-/\s]([A-Za-z]{3}|\d{1,2})[-/\s](\d{2,4})"
 )
@@ -51,30 +53,76 @@ def allowed_quarter_list(parsed: Optional[Dict[str, Any]]) -> List[str]:
     return [single] if single else []
 
 
+def subject_fy_start(parsed: Optional[Dict[str, Any]]) -> Optional[int]:
+    """FY start year named in the subject (``FY 2026-27`` / ``2026-27`` → 2026)."""
+    for key in ("period", "financial_year"):
+        raw = str((parsed or {}).get(key) or "").strip()
+        if not raw:
+            continue
+        spec = parse_quarter_label(raw)
+        if spec and spec.year is not None:
+            return int(spec.year)
+        match = re.search(r"(19|20)\d{2}", raw)
+        if match:
+            return int(match.group(0))
+    return None
+
+
+def subject_fiscal_year_start(subject: Optional[str]) -> Optional[int]:
+    """FY start named in an email subject; None when the subject names no period."""
+    if not str(subject or "").strip():
+        return None
+    from app.utils.email_subject_parser import try_parse_email_subject
+
+    parsed = try_parse_email_subject(subject) or {}
+    if not (parsed.get("period") or parsed.get("financial_year")):
+        return None
+    return subject_fy_start(parsed)
+
+
 def assign_row_periods(
     rows: Sequence[Dict[str, Any]],
     parsed: Optional[Dict[str, Any]],
 ) -> Tuple[bool, List[str]]:
     """
-    When the subject lists more than one quarter, keep or derive each row period.
+    Give every row the FY quarter of its own month. The subject only limits the range.
 
-    Returns (handled, warnings). A single subject quarter is left to the existing stamp.
+    The subject FY and quarter list are authoritative: a row from another FY or a quarter
+    outside the list is flagged ``human_review`` and never re-labelled. A row with no
+    month is stamped with the subject quarter only when the subject names exactly one
+    quarter; in a multi-quarter submission it is flagged, because the combined subject
+    period (``FY 2026-27``) is not a reporting bucket.
+
+    Returns (handled, warnings). Subjects without quarters (full FY) are not handled.
     """
     allowed = allowed_quarter_list(parsed)
-    if len(allowed) <= 1:
+    fy_start = subject_fy_start(parsed)
+    if not allowed or fy_start is None:
         return False, []
-    financial_year = str((parsed or {}).get("financial_year") or "")
+    scope = f"{'+'.join(allowed)} {fy_short_display(fy_start)}"
+    subject_month = str((parsed or {}).get("source_month") or "").strip()
     warnings: List[str] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        period = _period_from_row(row, financial_year)
-        if period:
+        if len(allowed) == 1 and subject_month and not str(row.get("source_month") or "").strip():
+            if _find_date(row) is None:
+                row["source_month"] = subject_month
+        period = _period_from_row(row)
+        if not period and len(allowed) == 1:
+            period = fy_quarter_label(fy_start, int(allowed[0][1]))
+        note = ""
+        if not period:
+            note = f"Row has no month or quarter; cannot place it inside {scope}"
+        else:
             row["period"] = period
             row["reporting_quarter"] = period
-        quarter = _quarter_token(row.get("period"))
-        if quarter and quarter not in allowed:
-            note = f"Row quarter {quarter} is outside the subject range {'+'.join(allowed)}"
+            spec = parse_quarter_label(period)
+            if spec is None or spec.year != fy_start:
+                note = f"Row period {period} is outside the subject financial year {fy_short_display(fy_start)}"
+            elif f"Q{spec.quarter}" not in allowed:
+                note = f"Row quarter Q{spec.quarter} is outside the subject range {scope}"
+        if note:
             row["validation_warning"] = note
             row["human_review"] = True
             warnings.append(note)
@@ -93,24 +141,23 @@ def quarter_split(rows: Sequence[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
-def _period_from_row(row: Dict[str, Any], financial_year: str) -> Optional[str]:
-    del financial_year
-    existing = _quarter_token(row.get("period") or row.get("reporting_quarter"))
-    if existing:
-        spec = parse_quarter_label(str(row.get("period") or row.get("reporting_quarter") or ""))
-        if spec and spec.kind == "quarter" and spec.year is not None and spec.quarter:
-            return fy_quarter_label(spec.year, spec.quarter)
-    parsed_date = _find_date(row)
-    if parsed_date is None:
-        month_hit = parse_month_label(str(row.get("source_month") or ""))
-        if not month_hit:
-            return None
+def _period_from_row(row: Dict[str, Any]) -> Optional[str]:
+    """Quarter of the row's own month/date; a quarter label on the row is the fallback."""
+    month_hit = parse_month_label(str(row.get("source_month") or ""))
+    if month_hit:
         month, year = month_hit
     else:
-        month, year = parsed_date.month, parsed_date.year
-        if not str(row.get("source_month") or "").strip():
+        parsed_date = _find_date(row)
+        if parsed_date is not None:
+            month, year = parsed_date.month, parsed_date.year
             row["source_month"] = month_label(month, year)
-        row["transaction_date"] = parsed_date.isoformat()
+            row["transaction_date"] = parsed_date.isoformat()
+        else:
+            for key in ("period", "reporting_quarter"):
+                spec = parse_quarter_label(str(row.get(key) or ""))
+                if spec and spec.kind == "quarter" and spec.year is not None and spec.quarter:
+                    return fy_quarter_label(spec.year, spec.quarter)
+            return None
     start = fy_start_for_calendar_month(month, year)
     return fy_quarter_label(start, quarter_of_month(month))
 
@@ -141,6 +188,12 @@ def _coerce_date(value: Any) -> Optional[date]:
     if month_hit:
         month, year = month_hit
         return date(year, month, 1)
+    iso = _ISO_RE.match(text)
+    if iso:
+        try:
+            return date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+        except ValueError:
+            return None
     match = _TOKEN_RE.search(text)
     if not match:
         return None

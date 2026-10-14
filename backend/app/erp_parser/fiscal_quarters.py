@@ -11,8 +11,10 @@ Canonical storage label: ``FY 2025-26 • Q1``
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Dict, List, Optional, Tuple
+import re
+from collections import Counter
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.utils.period_calendar import fy_quarter_label, parse_quarter_label
 
@@ -122,6 +124,36 @@ def resolve_fy_start_year(
     if spec and spec.year is not None:
         return int(spec.year)
     return current_fy_start_year()
+
+
+_HEADER_MONTH_YEAR_RE = re.compile(r"([A-Za-z]{3,9})[\s\-_/'.,]*(\d{4}|\d{2})\b")
+_HEADER_ISO_RE = re.compile(r"\b(\d{4})-(\d{1,2})-\d{1,2}\b")
+
+
+def header_fy_start(headers: Sequence[Any]) -> Optional[int]:
+    """FY start named by year-bearing month headers (``Apr26`` / ``April 2026`` / date cells).
+
+    Returns the most common FY across the headers, or None when no header carries a year.
+    """
+    found: List[int] = []
+    for header in headers:
+        if isinstance(header, (date, datetime)):
+            found.append(header.year if header.month >= 4 else header.year - 1)
+            continue
+        text = str(header or "").strip()
+        iso = _HEADER_ISO_RE.search(text)
+        if iso:
+            month, year = int(iso.group(2)), int(iso.group(1))
+        else:
+            hit = _HEADER_MONTH_YEAR_RE.search(text)
+            month = month_number_from_key(hit.group(1)) if hit else None
+            if not month:
+                continue
+            year = int(hit.group(2))
+            year = year + 2000 if year < 100 else year
+        if 1 <= month <= 12 and 1990 <= year <= 2100:
+            found.append(year if month >= 4 else year - 1)
+    return Counter(found).most_common(1)[0][0] if found else None
 
 
 def group_month_indexes_by_quarter(

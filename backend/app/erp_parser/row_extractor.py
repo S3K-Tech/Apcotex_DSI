@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.erp_parser.fiscal_quarters import (
     group_month_indexes_by_quarter,
+    header_fy_start,
     quarter_label,
     resolve_fy_start_year,
 )
@@ -109,7 +110,7 @@ def extract_rows(
             continue
 
     by_quarter = group_month_indexes_by_quarter(month_meta) if month_meta else {}
-    fy_start = resolve_fy_start_year(
+    fy_start = header_fy_start([header for _idx, header, _key in month_meta]) or resolve_fy_start_year(
         fiscal_year_start=fiscal_year_start,
         reporting_quarter=reporting_quarter,
     )

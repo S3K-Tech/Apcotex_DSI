@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.enums import AuditAction, AuditModule, AuditStatus
-from app.exceptions import NotFoundError
+from app.exceptions import NotFoundError, ValidationAppError
 from app.models.audit_trail import AuditTrail
 from app.repositories.audit_repository import AuditTrailRepository
 from app.schemas.audit import (
@@ -173,6 +173,36 @@ class AuditService:
             ip_address=ip_address,
             user_agent=user_agent,
         )
+
+    @staticmethod
+    def _purge_cutoff(before: date) -> datetime:
+        if before > date.today():
+            raise ValidationAppError("Cut-off date cannot be in the future")
+        return datetime.combine(before, time.min).replace(tzinfo=timezone.utc)
+
+    def purge_preview(self, before: date) -> Dict[str, Any]:
+        """How many entries a purge with this cut-off would delete."""
+        cutoff = self._purge_cutoff(before)
+        return {"before": before.isoformat(), "count": self.repo.count_before(cutoff)}
+
+    def purge_before(self, before: date, *, actor: str, role: Optional[str] = None) -> Dict[str, Any]:
+        """Bulk-delete entries older than ``before`` and record the purge itself."""
+        cutoff = self._purge_cutoff(before)
+        deleted = self.repo.delete_before(cutoff)
+        self.record(
+            actor=actor,
+            role=role,
+            action="Deleted Old Audit Logs",
+            description=f"Deleted {deleted} audit log entries created before {before.isoformat()}",
+            module=AuditModule.SYSTEM.value,
+            status=AuditStatus.SUCCESS.value,
+            entity_type="audit_trail",
+            metadata={"before": before.isoformat(), "deleted": deleted},
+        )
+        logger.info(
+            f"Audit purge | actor={actor} | role={role} | before={before.isoformat()} | deleted={deleted}"
+        )
+        return {"before": before.isoformat(), "deleted": deleted}
 
     def get(self, audit_id: int) -> AuditTrail:
         """Fetch one audit row or raise NotFoundError."""

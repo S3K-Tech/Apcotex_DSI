@@ -393,9 +393,9 @@ class ReportService:
         company: str,
         reporting_month: str,
     ) -> List[ParsedSalesRow]:
-        """Sum duplicate Customer×Product×Period lines so row_hash stays unique."""
-        buckets: dict[tuple[str, str, str], ParsedSalesRow] = {}
-        order: List[tuple[str, str, str]] = []
+        """Sum duplicate Customer×Product×Period×Segment lines so row_hash stays unique."""
+        buckets: dict[tuple[str, ...], ParsedSalesRow] = {}
+        order: List[tuple[str, ...]] = []
         for row in rows:
             customer = (row.customer_name or "").strip()
             product = (row.product or "").strip()
@@ -403,12 +403,14 @@ class ReportService:
             if not customer or not product or not period:
                 continue
             source_month = (getattr(row, "source_month", None) or "").strip()
+            segment = (row.segment or "").strip()
             key = (
                 customer.casefold(),
                 product.casefold(),
                 period.casefold(),
                 (getattr(row, "location", "") or "").casefold(),
                 source_month.casefold(),
+                segment.casefold(),
             )
             qty = row.quantity if isinstance(row.quantity, Decimal) else Decimal(str(row.quantity))
             if key in buckets:
@@ -418,7 +420,7 @@ class ReportService:
                 existing.row_hash = build_sales_row_hash(
                     company,
                     existing.customer_name,
-                    "",
+                    segment,
                     existing.product,
                     existing.quantity,
                     period,
@@ -428,12 +430,12 @@ class ReportService:
                 row.distributor = company
                 row.company = company
                 row.period = period
-                row.segment = row.segment or ""
+                row.segment = segment
                 row.location = getattr(row, "location", "") or ""
                 row.quantity = qty
                 row.quantity_display = format_quantity(qty)
                 row.row_hash = build_sales_row_hash(
-                    company, customer, "", product, qty, period, source_month
+                    company, customer, segment, product, qty, period, source_month
                 )
                 buckets[key] = row
                 order.append(key)
@@ -959,6 +961,7 @@ class ReportService:
                 details=(
                     f"ERP quarter append | report_id={report.id} | "
                     f"distributor_id={distributor_id} | period={reporting_month} | "
+                    f"segments={sorted({(r.segment or '').strip() for r in parsed_rows})} | "
                     f"rows_added={inserted}"
                 ),
                 entity_type="report",

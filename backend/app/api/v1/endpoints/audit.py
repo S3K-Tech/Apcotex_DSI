@@ -11,6 +11,7 @@ from app.dependencies.services import AuditServiceDep
 from app.enums import AuditModule, AuditStatus
 from app.schemas.audit import (
     AuditEventCreate,
+    AuditPurgeRequest,
     AuditTrailPageResponse,
     AuditTrailResponse,
     AuditTrailRow,
@@ -131,6 +132,37 @@ def create_audit_event(
         data=AuditTrailResponse.model_validate(created),
         message="Audit event recorded",
     )
+
+
+@router.get(
+    "/purge-preview",
+    response_model=DataResponse[dict],
+    summary="Count audit entries older than a cut-off date (Admin / Super Admin)",
+)
+def purge_preview(
+    service: AuditServiceDep,
+    _: RequireAdmin,
+    before: date = Query(..., description="Entries created before this date (YYYY-MM-DD)"),
+) -> DataResponse[dict]:
+    return DataResponse(data=service.purge_preview(before))
+
+
+@router.post(
+    "/purge",
+    response_model=DataResponse[dict],
+    summary="Bulk-delete audit entries older than a cut-off date (Admin / Super Admin)",
+)
+def purge_audit_trail(
+    payload: AuditPurgeRequest,
+    service: AuditServiceDep,
+    current: RequireAdmin,
+) -> DataResponse[dict]:
+    result = service.purge_before(
+        payload.before,
+        actor=current.name,
+        role=current.role.value if hasattr(current.role, "value") else str(current.role),
+    )
+    return DataResponse(data=result, message=f"Deleted {result['deleted']} audit log entries")
 
 
 @router.get(

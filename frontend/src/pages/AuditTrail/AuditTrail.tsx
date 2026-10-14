@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { Search, Download, Eye, Filter, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Search, Download, Eye, Filter, ChevronLeft, ChevronRight, X, Trash2 } from 'lucide-react';
 import { Navigate } from 'react-router';
 import { useLayoutContext } from '../../hooks/useLayoutContext';
 import { StatusBanner } from '../../components/common/StatusBanner';
 import { AuditTrailService } from '../../services/auditTrail.service';
 import { ApiError } from '../../api';
-import { BLUE, BORDER } from '../../constants/theme';
+import { BLUE, BORDER, RED } from '../../constants/theme';
 import { isAdminRole } from '../../utils/rbac';
 import type { AuditTrailQuery, AuditTrailRow } from '../../types';
 import { formatPeriodsInText } from '../../utils/quarter';
@@ -101,6 +101,16 @@ export function AuditTrail() {
   const [totalPages, setTotalPages] = useState(0);
   const [selected, setSelected] = useState<AuditTrailRow | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeBefore, setPurgeBefore] = useState(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+    return isoDate(cutoff);
+  });
+  const [purgeCount, setPurgeCount] = useState<number | null>(null);
+  const [purgeBusy, setPurgeBusy] = useState(false);
+  const [purgeError, setPurgeError] = useState<string | null>(null);
+  const [purgeSuccess, setPurgeSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -150,6 +160,30 @@ export function AuditTrail() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (!purgeOpen) return undefined;
+    if (!purgeBefore) {
+      setPurgeCount(null);
+      setPurgeError(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setPurgeCount(null);
+    setPurgeError(null);
+    AuditTrailService.purgePreview(purgeBefore)
+      .then(data => {
+        if (!cancelled) setPurgeCount(data.count);
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setPurgeError(err instanceof ApiError ? err.message : 'Could not count old logs');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [purgeOpen, purgeBefore]);
+
   if (!isAdminRole(userRole)) {
     return <Navigate to="/" replace />;
   }
@@ -164,6 +198,29 @@ export function AuditTrail() {
       setExporting(false);
     }
   };
+
+  const purgeConfirmDisabled = purgeBusy || !purgeBefore || !purgeCount;
+
+  const onPurge = async () => {
+    if (purgeConfirmDisabled) return;
+    setPurgeBusy(true);
+    setPurgeError(null);
+    try {
+      const result = await AuditTrailService.purge(purgeBefore);
+      setPurgeOpen(false);
+      setPurgeSuccess(
+        `Deleted ${result.deleted} audit log entr${result.deleted === 1 ? 'y' : 'ies'} older than ${result.before}.`,
+      );
+      setPage(1);
+      await load();
+    } catch (err) {
+      setPurgeError(err instanceof ApiError ? err.message : 'Delete failed');
+    } finally {
+      setPurgeBusy(false);
+    }
+  };
+
+  const todayIso = isoDate(new Date());
 
   return (
     <div style={{ padding: '24px', maxWidth: 1280, margin: '0 auto' }}>
@@ -247,7 +304,33 @@ export function AuditTrail() {
           <Download size={14} />
           {exporting ? 'Exporting…' : 'Export Excel'}
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setPurgeSuccess(null);
+            setPurgeOpen(true);
+          }}
+          style={{ ...primaryBtn, background: 'white', color: RED, border: `1px solid ${RED}` }}
+        >
+          <Trash2 size={14} />
+          Delete Old Logs
+        </button>
       </div>
+
+      {purgeSuccess && (
+        <div
+          style={{
+            padding: 12,
+            marginBottom: 16,
+            borderRadius: 8,
+            background: 'rgba(16,185,129,0.08)',
+            color: '#065F46',
+            fontSize: '0.875rem',
+          }}
+        >
+          {purgeSuccess}
+        </div>
+      )}
 
       <div
         style={{
@@ -350,6 +433,113 @@ export function AuditTrail() {
           row={selected}
           onClose={() => setSelected(null)}
         />
+      )}
+
+      {purgeOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15,23,42,0.45)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => {
+            if (!purgeBusy) setPurgeOpen(false);
+          }}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: 12,
+              width: '100%',
+              maxWidth: 440,
+              padding: 24,
+              boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
+            }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 12,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 700, color: '#111827' }}>
+                Delete Old Audit Logs
+              </h2>
+              <button
+                type="button"
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}
+                disabled={purgeBusy}
+                onClick={() => setPurgeOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p style={{ margin: '0 0 14px', fontSize: '0.8125rem', color: '#6B7280', lineHeight: 1.5 }}>
+              Permanently deletes every audit log entry created before the selected date. This cannot be
+              undone. The deletion itself is recorded in the audit trail.
+            </p>
+            <div style={labelStyle}>Delete logs older than</div>
+            <input
+              type="date"
+              value={purgeBefore}
+              max={todayIso}
+              onChange={event => setPurgeBefore(event.target.value)}
+              style={{ ...inputStyle, marginBottom: 12 }}
+            />
+            <div style={{ fontSize: '0.875rem', color: '#111827', fontWeight: 600, marginBottom: 14 }}>
+              {purgeCount == null && !purgeError
+                ? 'Counting…'
+                : purgeCount != null
+                  ? `${purgeCount} entr${purgeCount === 1 ? 'y' : 'ies'} will be deleted.`
+                  : null}
+            </div>
+            {purgeError && (
+              <div
+                style={{
+                  padding: 10,
+                  marginBottom: 12,
+                  borderRadius: 8,
+                  background: 'rgba(217,58,47,0.08)',
+                  color: RED,
+                  fontSize: '0.8125rem',
+                }}
+              >
+                {purgeError}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                style={{ ...primaryBtn, background: 'white', color: '#374151', border: `1px solid ${BORDER}` }}
+                disabled={purgeBusy}
+                onClick={() => setPurgeOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...primaryBtn,
+                  background: RED,
+                  opacity: purgeConfirmDisabled ? 0.6 : 1,
+                }}
+                disabled={purgeConfirmDisabled}
+                onClick={() => void onPurge()}
+              >
+                <Trash2 size={14} />
+                {purgeBusy ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

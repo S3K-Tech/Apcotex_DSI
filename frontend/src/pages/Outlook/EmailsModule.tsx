@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   Play,
   Loader2,
@@ -13,6 +13,7 @@ import type { EmailRecord } from '../../types';
 import {
   EmailsService,
   type ERPPreviewResponse,
+  type ReviewSummary,
 } from '../../services/emails.service';
 import { ApiError, getSession } from '../../api';
 import { isAdminRole } from '../../utils/rbac';
@@ -67,6 +68,26 @@ function isScoreRunning(email: EmailRecord): boolean {
   const status = (email.processStatus || email.scoringStatus || '').toLowerCase();
   return status === 'scoring' || status === 'queued';
 }
+
+function isHumanReview(email: EmailRecord): boolean {
+  const label = (email.statusLabel || '').toLowerCase();
+  return label === 'human review required' || label === 'human review';
+}
+
+function reviewPeriodLabel(summary: ReviewSummary): string {
+  const periods = summary.incoming.periods;
+  if (periods && periods.length) {
+    return periods.map(period => formatPeriodDisplay(period)).join(', ');
+  }
+  return formatPeriodDisplay(summary.incoming.period) || '-';
+}
+
+type HumanReviewState = {
+  email: EmailRecord;
+  summary: ReviewSummary | null;
+  busy: boolean;
+  error: string | null;
+};
 
 /** Single Accuracy badge. Scoring is only shown while the job is still running. */
 function accuracyMeta(email: EmailRecord): {
@@ -165,6 +186,8 @@ export function EmailsModule() {
     label: string;
   } | null>(null);
   const [batchResults, setBatchResults] = useState<BatchItemResult[]>([]);
+  const [review, setReview] = useState<HumanReviewState | null>(null);
+  const reviewRequestId = useRef(0);
 
   const refreshEmails = async () => {
     const data = await EmailsService.getExtractedEmails();
@@ -197,6 +220,68 @@ export function EmailsModule() {
     }, 4000);
     return () => window.clearInterval(id);
   }, [emails]);
+
+  const openReview = (email: EmailRecord) => {
+    const token = ++reviewRequestId.current;
+    setReview({ email, summary: null, busy: true, error: null });
+    void (async () => {
+      try {
+        const summary = await EmailsService.getReviewSummary(email.id);
+        if (reviewRequestId.current !== token) return;
+        setReview({ email, summary, busy: false, error: null });
+      } catch (err) {
+        if (reviewRequestId.current !== token) return;
+        setReview({
+          email,
+          summary: null,
+          busy: false,
+          error: err instanceof ApiError ? err.message : 'Could not load review details',
+        });
+      }
+    })();
+  };
+
+  const closeReview = () => {
+    if (review?.busy) return;
+    reviewRequestId.current += 1;
+    setReview(null);
+  };
+
+  const submitReview = async (action: 'ADD' | 'DELETE') => {
+    if (!review?.summary?.reviewable || review.busy) return;
+    const token = reviewRequestId.current;
+    const segment = review.summary.incoming.segment;
+    const emailId = review.email.id;
+    setReview({ ...review, busy: true, error: null });
+    let result;
+    try {
+      result = await EmailsService.resolveReview(emailId, action);
+    } catch (err) {
+      if (reviewRequestId.current !== token) return;
+      setReview({
+        ...review,
+        busy: false,
+        error: err instanceof ApiError ? err.message : 'Review action failed',
+      });
+      return;
+    }
+    if (reviewRequestId.current !== token) return;
+    reviewRequestId.current += 1;
+    setReview(null);
+    setError(null);
+    setSyncMessage(
+      action === 'DELETE'
+        ? 'Incoming data rejected. Existing data kept.'
+        : result.outcome === 'duplicate_upload'
+          ? 'No new records to add. Existing data kept.'
+          : `Added ${result.records_inserted ?? 0} sales rows for ${segment || 'this segment'}.`,
+    );
+    try {
+      await refreshEmails();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to sync / load emails');
+    }
+  };
 
   const handleExtract = async () => {
     setExtracting(true);
@@ -828,6 +913,23 @@ export function EmailsModule() {
                       </td>
                       <td style={{ padding: '12px 14px' }}>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap' }}>
+                          {isHumanReview(email) && (
+                            <button
+                              type="button"
+                              style={{
+                                ...btnSecondary,
+                                padding: '5px 8px',
+                                fontSize: '0.75rem',
+                                color: BLUE,
+                              }}
+                              onClick={event => {
+                                event.stopPropagation();
+                                openReview(email);
+                              }}
+                            >
+                              Review
+                            </button>
+                          )}
                           {isAdmin && (
                             <button
                               type="button"
@@ -1019,6 +1121,208 @@ export function EmailsModule() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {review && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15,23,42,0.45)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => {
+            if (!review.busy) closeReview();
+          }}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: 12,
+              width: '100%',
+              maxWidth: 640,
+              padding: 24,
+              boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
+            }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 12,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 700, color: '#111827' }}>
+                Human Review
+              </h2>
+              <button
+                type="button"
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}
+                disabled={review.busy}
+                onClick={closeReview}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {review.busy && !review.summary && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  color: BLUE,
+                  fontSize: '0.875rem',
+                }}
+              >
+                <Loader2 size={16} className="spin" /> Loading…
+              </div>
+            )}
+
+            {review.summary && (
+              <>
+                <div
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    color: '#6B7280',
+                    textTransform: 'uppercase',
+                    marginBottom: 8,
+                  }}
+                >
+                  Incoming
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                    gap: 12,
+                    padding: 12,
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: 8,
+                    marginBottom: 16,
+                  }}
+                >
+                  <Info label="Distributor" value={review.summary.incoming.distributor || '-'} />
+                  <Info label="Location" value={review.summary.incoming.location || '-'} />
+                  <Info
+                    label="Segment"
+                    value={review.summary.incoming.segment || '-'}
+                    valueColor={BLUE}
+                  />
+                  <Info label="Period" value={reviewPeriodLabel(review.summary)} />
+                </div>
+
+                <div
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    color: '#6B7280',
+                    textTransform: 'uppercase',
+                    marginBottom: 8,
+                  }}
+                >
+                  Existing in Consolidated Data
+                </div>
+                {(review.summary.existing || []).length === 0 ? (
+                  <div style={{ fontSize: '0.8125rem', color: '#6B7280', marginBottom: 16 }}>
+                    No consolidated records for this distributor in these periods.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: 8,
+                      marginBottom: 16,
+                      maxHeight: 220,
+                      overflow: 'auto',
+                    }}
+                  >
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
+                      <thead>
+                        <tr style={{ background: '#F3F4F6' }}>
+                          <th style={th}>Segment</th>
+                          <th style={th}>Location</th>
+                          <th style={th}>Period</th>
+                          <th style={{ ...th, textAlign: 'right' }}>Records</th>
+                          <th style={{ ...th, textAlign: 'right' }}>Qty (MT)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {review.summary.existing.map(row => (
+                          <tr
+                            key={`${row.segment}|${row.location}|${row.period}`}
+                            style={{ borderBottom: `1px solid ${BORDER}` }}
+                          >
+                            <td style={{ ...td, fontWeight: 700 }}>{row.segment || '-'}</td>
+                            <td style={td}>{row.location || '-'}</td>
+                            <td style={td}>{formatPeriodDisplay(row.period) || '-'}</td>
+                            <td style={{ ...td, textAlign: 'right' }}>{row.records}</td>
+                            <td style={{ ...td, textAlign: 'right' }}>
+                              {Number(row.quantity_mt).toFixed(3)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <p style={{ margin: '0 0 16px', fontSize: '0.8125rem', color: '#6B7280', lineHeight: 1.5 }}>
+                  {review.summary.same_segment_exists
+                    ? 'This segment already has records for this period. ADD THIS stores only rows that do not exist yet; existing rows are not overwritten.'
+                    : 'A different segment exists for this period. ADD THIS stores the incoming segment separately without merging.'}{' '}
+                  DELETE rejects the incoming data and keeps existing data.
+                </p>
+              </>
+            )}
+
+            {review.error && (
+              <div
+                style={{
+                  padding: 12,
+                  marginBottom: 12,
+                  borderRadius: 8,
+                  background: 'rgba(217,58,47,0.08)',
+                  color: RED,
+                  fontSize: '0.8125rem',
+                }}
+              >
+                {review.error}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button type="button" style={btnSecondary} disabled={review.busy} onClick={closeReview}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                style={{ ...btnSecondary, color: RED, borderColor: RED }}
+                disabled={review.busy || !review.summary?.reviewable}
+                onClick={() => void submitReview('DELETE')}
+              >
+                <Trash2 size={14} />
+                DELETE
+              </button>
+              <button
+                type="button"
+                style={{ ...btnPrimary, background: TEAL }}
+                disabled={review.busy || !review.summary?.reviewable}
+                onClick={() => void submitReview('ADD')}
+              >
+                {review.busy && review.summary ? <Loader2 size={14} className="spin" /> : null}
+                ADD THIS
+              </button>
+            </div>
           </div>
         </div>
       )}

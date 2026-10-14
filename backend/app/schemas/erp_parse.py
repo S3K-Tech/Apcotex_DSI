@@ -166,6 +166,12 @@ class ERPImportRequest(BaseModel):
     confirm_add: bool = False
 
 
+class ERPReviewDecisionRequest(BaseModel):
+    """Human Review resolution for one email."""
+
+    action: str = Field(..., pattern=r"(?i)^(add|delete)$")
+
+
 class DuplicateReview(BaseModel):
     """Shown when consolidated rows already exist for this distributor slice."""
 

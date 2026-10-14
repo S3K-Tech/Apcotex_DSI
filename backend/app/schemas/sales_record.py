@@ -52,6 +52,15 @@ class SalesLineItem(BaseModel):
     quantity: str
 
 
+class ReportSegmentGroup(BaseModel):
+    """One Location × Segment slice of a distributor report. Quantities are never merged across slices."""
+
+    segment: str
+    location: str = ""
+    recordCount: int = 0
+    quantityMt: float = 0.0
+
+
 class ReportSalesGroup(BaseModel):
     """One report with its sales rows — report metadata shown once."""
 
@@ -77,6 +86,7 @@ class ReportSalesGroup(BaseModel):
     validationSummary: Optional[dict] = None
     validationMessage: Optional[str] = None
     sales: List[SalesLineItem] = Field(default_factory=list)
+    segments: List[ReportSegmentGroup] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _sync_reporting_quarter(self) -> "ReportSalesGroup":

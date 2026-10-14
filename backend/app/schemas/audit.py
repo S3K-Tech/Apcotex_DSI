@@ -27,6 +27,12 @@ class AuditTrailCreate(BaseModel):
     extra_metadata: Optional[Dict[str, Any]] = None
 
 
+class AuditPurgeRequest(BaseModel):
+    """Delete every audit entry created before this date."""
+
+    before: date
+
+
 class AuditEventCreate(BaseModel):
     """Client-reported meaningful business event (login, view opened, etc.)."""
 

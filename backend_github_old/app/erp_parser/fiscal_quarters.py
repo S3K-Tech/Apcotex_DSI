@@ -1,0 +1,139 @@
+"""Fiscal-year quarter helpers for monthly-pivot ERP workbooks.
+
+APCOTEX Indian FY (Apr–Mar):
+  Q1 = Apr–Jun
+  Q2 = Jul–Sep
+  Q3 = Oct–Dec
+  Q4 = Jan–Mar (calendar year = FY start + 1)
+
+Canonical storage label: ``FY 2025-26 • Q1``
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Dict, List, Optional, Tuple
+
+from app.utils.period_calendar import fy_quarter_label, parse_quarter_label
+
+# Month key (normalized) → fiscal quarter number
+MONTH_TO_FY_QUARTER: Dict[str, int] = {
+    "april": 1,
+    "apr": 1,
+    "may": 1,
+    "june": 1,
+    "jun": 1,
+    "july": 2,
+    "jul": 2,
+    "august": 2,
+    "aug": 2,
+    "september": 2,
+    "sep": 2,
+    "sept": 2,
+    "october": 3,
+    "oct": 3,
+    "november": 3,
+    "nov": 3,
+    "december": 3,
+    "dec": 3,
+    "january": 4,
+    "jan": 4,
+    "february": 4,
+    "feb": 4,
+    "march": 4,
+    "mar": 4,
+}
+
+
+def current_fy_start_year(today: Optional[date] = None) -> int:
+    """FY starts in April: Apr 2026 → 2026; Jan 2026 → 2025."""
+    d = today or date.today()
+    return d.year if d.month >= 4 else d.year - 1
+
+
+_MONTH_NUMBER: Dict[str, int] = {
+    "january": 1,
+    "jan": 1,
+    "february": 2,
+    "feb": 2,
+    "march": 3,
+    "mar": 3,
+    "april": 4,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "jun": 6,
+    "july": 7,
+    "jul": 7,
+    "august": 8,
+    "aug": 8,
+    "september": 9,
+    "sep": 9,
+    "sept": 9,
+    "october": 10,
+    "oct": 10,
+    "november": 11,
+    "nov": 11,
+    "december": 12,
+    "dec": 12,
+}
+
+
+def month_key_to_quarter(month_key: str) -> Optional[int]:
+    return MONTH_TO_FY_QUARTER.get((month_key or "").strip().lower())
+
+
+def month_number_from_key(month_key: str) -> Optional[int]:
+    return _MONTH_NUMBER.get((month_key or "").strip().lower())
+
+
+def source_month_label(month_key: str, fy_start: int, header: str = "") -> Optional[str]:
+    """Calendar month label such as ``April 2026`` for chart aggregation."""
+    from app.utils.period_calendar import (
+        calendar_year_for_fy_month,
+        month_label,
+        parse_month_label,
+    )
+
+    parsed = parse_month_label(header or "")
+    if parsed:
+        month, year = parsed
+        return month_label(month, year)
+    month = month_number_from_key(month_key)
+    if not month:
+        return None
+    return month_label(month, calendar_year_for_fy_month(int(fy_start), month))
+
+
+def quarter_label(fy_start_year: int, quarter: int) -> str:
+    """Label stored on reports / sales.period, e.g. ``FY 2025-26 • Q1``."""
+    return fy_quarter_label(int(fy_start_year), int(quarter))
+
+
+def resolve_fy_start_year(
+    *,
+    fiscal_year_start: Optional[int] = None,
+    reporting_quarter: Optional[str] = None,
+) -> int:
+    """Prefer explicit FY start; else year from period label; else current FY."""
+    if fiscal_year_start and 1990 <= int(fiscal_year_start) <= 2100:
+        return int(fiscal_year_start)
+    spec = parse_quarter_label((reporting_quarter or "").strip())
+    if spec and spec.year is not None:
+        return int(spec.year)
+    return current_fy_start_year()
+
+
+def group_month_indexes_by_quarter(
+    month_columns: List[Tuple[int, str, str]],
+) -> Dict[int, List[int]]:
+    """
+    ``month_columns`` items are ``(col_index, original_header, month_key)``.
+    Returns ``{1: [idxs], 2: [...], ...}`` for quarters that have at least one column.
+    """
+    grouped: Dict[int, List[int]] = {1: [], 2: [], 3: [], 4: []}
+    for idx, _header, key in month_columns:
+        q = month_key_to_quarter(key)
+        if q:
+            grouped[q].append(idx)
+    return {q: cols for q, cols in grouped.items() if cols}

@@ -128,6 +128,33 @@ export type ERPImportResult = {
   quarters_imported?: string[];
 };
 
+export type ReviewExistingRow = {
+  segment: string;
+  location: string;
+  period: string;
+  records: number;
+  quantity_mt: number;
+};
+
+export type ReviewSummary = {
+  reviewable: boolean;
+  incoming: {
+    distributor?: string;
+    location?: string;
+    segment?: string;
+    period?: string;
+    periods?: string[];
+  };
+  existing: ReviewExistingRow[];
+  same_segment_exists: boolean;
+};
+
+export type ReviewDecisionResult = {
+  action?: string;
+  outcome?: string;
+  records_inserted?: number;
+};
+
 export const EmailsService = {
   getExtractedEmails: async (): Promise<EmailRecord[]> => {
     return apiRequest<EmailRecord[]>('/emails');
@@ -310,6 +337,24 @@ export const EmailsService = {
 
   skipEmail: async (emailId: number): Promise<void> => {
     await apiRequest(`/erp/emails/${emailId}/skip`, { method: 'POST' });
+  },
+
+  getReviewSummary: async (emailId: number): Promise<ReviewSummary> => {
+    const res = await apiRequest<{ success: boolean; data: ReviewSummary }>(
+      `/erp/emails/${emailId}/review-summary`,
+    );
+    return res.data;
+  },
+
+  resolveReview: async (
+    emailId: number,
+    action: 'ADD' | 'DELETE',
+  ): Promise<ReviewDecisionResult> => {
+    const res = await apiRequest<{ success: boolean; data: ReviewDecisionResult }>(
+      `/erp/emails/${emailId}/review-decision`,
+      { method: 'POST', body: { action } },
+    );
+    return res.data;
   },
 
   /** Optional file-only preview (multipart). */

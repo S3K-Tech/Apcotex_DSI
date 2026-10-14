@@ -24,8 +24,21 @@ from app.services.erp_ingest.constants import (
     logger,
 )
 from app.services.report_service import DUPLICATE_SUBMISSION_MESSAGE
+from app.utils.datetime_utils import utc_now
 from app.utils.hashing import build_sales_row_hash
+from app.utils.period_calendar import parse_quarter_label
 from app.utils.quantity import format_quantity, parse_quantity
+
+
+def _rows_conflict_with_fy(rows: Optional[Sequence[Any]], fy_start: int) -> bool:
+    for row in rows or []:
+        data = row if isinstance(row, dict) else getattr(row, "__dict__", {})
+        for key in ("period", "reporting_quarter"):
+            spec = parse_quarter_label(str(data.get(key) or ""))
+            if spec is not None and spec.year is not None and spec.year != fy_start:
+                return True
+    return False
+
 
 class ImportMixin:
     def _persist_preview_rows(
@@ -476,6 +489,25 @@ class ImportMixin:
         subject_month = str(subject_meta.get("source_month") or "").strip()
         source_unit = str(subject_meta.get("unit") or email.parsed_unit or "MT").strip() or "MT"
         subject_period = (email.detected_quarter or reporting_quarter or "").strip()
+        from app.erp_parser.documents.row_quarters import subject_fiscal_year_start
+
+        subject_fy = subject_fiscal_year_start(email.subject)
+        if subject_fy is not None and fiscal_year_start not in (None, subject_fy):
+            logger.warning(
+                f"Client FY ignored; subject FY wins | email_id={email_id} | "
+                f"client={fiscal_year_start} | subject={subject_fy}"
+            )
+        fiscal_year_start = subject_fy or fiscal_year_start
+        if subject_fy is not None and quarter:
+            spec = parse_quarter_label(quarter)
+            if spec is not None and spec.year is not None and spec.year != subject_fy:
+                quarter = ""
+                reporting_quarter = None
+        rows_fy_conflict = subject_fy is not None and _rows_conflict_with_fy(rows, subject_fy)
+        if rows_fy_conflict:
+            logger.warning(
+                f"Client preview rows carry a different FY; re-parsing | email_id={email_id} | subject_fy={subject_fy}"
+            )
 
         preferred_parser, known_fingerprint = self._preferred_parser_pair(email)
         known_profiles = self._known_profiles(email)
@@ -500,7 +532,7 @@ class ImportMixin:
                         reporting_quarter=quarter or None,
                     )
                     use_rows = preview.get("rows") or rows or []
-                elif idx == 0 and rows and len(attachments) == 1:
+                elif idx == 0 and rows and len(attachments) == 1 and not rows_fy_conflict:
                     # Single-file Approve with precomputed rows (no remap)
                     preview = self.parser.preview(
                         path,
@@ -566,9 +598,18 @@ class ImportMixin:
                 handled, review_notes = assign_row_periods(use_rows, subject_meta)
                 if review_notes:
                     logger.warning(
-                        "Quarter outside subject range | email_id={} | count={}",
+                        "Quarter outside subject range | email_id={} | count={} | first={}",
                         email_id,
                         len(review_notes),
+                        review_notes[0],
+                    )
+                    workbook_skips.append(
+                        {
+                            "workbook": att.file_name,
+                            "reason": (
+                                f"{len(review_notes)} row(s) held for review: {review_notes[0]}"
+                            ),
+                        }
                     )
                 if not handled:
                     for row in use_rows:
@@ -783,3 +824,184 @@ class ImportMixin:
             )
         )
         return {"email_id": email_id, "status": "skipped"}
+
+    _REVIEWABLE_STATUSES = {
+        EmailProcessStatus.INCREMENTAL_REVIEW.value,
+        EmailProcessStatus.HUMAN_REVIEW.value,
+    }
+
+    def _incoming_scope(self, email: Any) -> Dict[str, Any]:
+        """Distributor / location / segment / period of an email, taken from its subject."""
+        from app.constants.business_segments import normalize_business_segment
+        from app.utils.email_subject_parser import try_parse_email_subject
+        from app.utils.period_calendar import fy_quarter_label, parse_quarter_label
+
+        meta = try_parse_email_subject(email.subject) or {}
+        period = str(meta.get("period") or email.detected_quarter or "").strip()
+        spec = parse_quarter_label(period)
+        labels: List[str] = []
+        months: set = set()
+        if spec and spec.year is not None and meta.get("allowed_quarters"):
+            for q in meta["allowed_quarters"]:
+                label = fy_quarter_label(spec.year, int(str(q).upper().lstrip("Q")))
+                labels.append(label)
+                q_spec = parse_quarter_label(label)
+                months.update(m.casefold() for m in (q_spec.months if q_spec else ()))
+        elif spec:
+            labels.append(spec.label)
+            months.update(m.casefold() for m in spec.months)
+        return {
+            "distributor": (email.parsed_distributor or "").strip(),
+            "location": (email.parsed_location or "").strip(),
+            "segment": normalize_business_segment(email.parsed_segment),
+            "period": period,
+            "periods": labels,
+            "months": months,
+            "unit": str(meta.get("unit") or email.parsed_unit or "").strip(),
+        }
+
+    def review_summary(self, email_id: int) -> Dict[str, Any]:
+        """Existing consolidated segments vs the incoming email, for the Human Review modal."""
+        from sqlalchemy import func, select
+
+        from app.models.report import Report
+        from app.models.sales_record import SalesRecord
+        from app.repositories.sales_record_repository import mt_quantity_expr
+        from app.utils.period_calendar import parse_quarter_label
+        from app.utils.quantity import round_mt
+
+        email = self.emails.get_or_raise(email_id)
+        scope = self._incoming_scope(email)
+        dist = self.resolve_distributor_from_subject(email)
+        existing: List[Dict[str, Any]] = []
+        if dist is not None:
+            rows = self.db.execute(
+                select(
+                    SalesRecord.segment,
+                    SalesRecord.location,
+                    SalesRecord.period,
+                    SalesRecord.source_month,
+                    func.count(SalesRecord.id),
+                    func.coalesce(func.sum(mt_quantity_expr()), 0),
+                )
+                .join(Report, Report.id == SalesRecord.report_id)
+                .where(
+                    SalesRecord.is_deleted.is_(False),
+                    Report.is_deleted.is_(False),
+                    SalesRecord.distributor_id == int(dist["id"]),
+                )
+                .group_by(
+                    SalesRecord.segment,
+                    SalesRecord.location,
+                    SalesRecord.period,
+                    SalesRecord.source_month,
+                )
+            ).all()
+            buckets: Dict[tuple, Dict[str, Any]] = {}
+            for seg, loc, period, source_month, count, qty in rows:
+                row_months = {str(source_month or "").casefold()} - {""}
+                if not row_months:
+                    spec = parse_quarter_label(str(period or ""))
+                    row_months = {m.casefold() for m in (spec.months if spec else ())}
+                if scope["months"] and not (row_months & scope["months"]):
+                    continue
+                key = ((seg or "").strip(), (loc or "").strip(), (period or "").strip())
+                bucket = buckets.setdefault(
+                    key,
+                    {
+                        "segment": key[0],
+                        "location": key[1],
+                        "period": key[2],
+                        "records": 0,
+                        "quantity_mt": 0.0,
+                    },
+                )
+                bucket["records"] += int(count or 0)
+                bucket["quantity_mt"] = round_mt(
+                    Decimal(str(bucket["quantity_mt"])) + Decimal(str(qty or 0))
+                )
+            existing = sorted(
+                buckets.values(), key=lambda b: (b["period"], b["location"], b["segment"])
+            )
+        incoming_seg = scope["segment"].casefold()
+        incoming_loc = scope["location"].casefold()
+        return {
+            "email_id": email.id,
+            "subject": email.subject,
+            "status": email.process_status,
+            "reviewable": (email.process_status or "") in self._REVIEWABLE_STATUSES,
+            "distributor_id": dist["id"] if dist else None,
+            "incoming": {
+                "distributor": scope["distributor"],
+                "location": scope["location"],
+                "segment": scope["segment"],
+                "period": scope["period"],
+                "periods": scope["periods"],
+                "unit": scope["unit"],
+            },
+            "existing": existing,
+            "same_segment_exists": any(
+                b["segment"].casefold() == incoming_seg
+                and (not incoming_loc or b["location"].casefold() == incoming_loc)
+                for b in existing
+            ),
+        }
+
+    def resolve_review(self, email_id: int, *, action: str, actor: str) -> Dict[str, Any]:
+        """Human Review decision. ADD imports the incoming segment as new rows; DELETE rejects it."""
+        decision = (action or "").strip().upper()
+        if decision not in {"ADD", "DELETE"}:
+            raise ValidationAppError("action must be ADD or DELETE")
+        email = self.emails.get_or_raise(email_id)
+        if (email.process_status or "") not in self._REVIEWABLE_STATUSES:
+            raise ValidationAppError(
+                "This email is not awaiting Human Review.",
+                details={"email_id": email_id, "status": email.process_status},
+            )
+        scope = self._incoming_scope(email)
+        result: Dict[str, Any] = {}
+        if decision == "ADD":
+            result = self.import_approved(email_id=email_id, actor=actor, confirm_add=True)
+            outcome = (
+                "duplicate_upload" if result.get("duplicate_upload") else "imported"
+            )
+        else:
+            email.process_status = EmailProcessStatus.SKIPPED.value
+            email.error_message = "Rejected in Human Review. Existing data kept."
+            self.db.flush()
+            outcome = "rejected"
+        self.audit.log(
+            AuditTrailCreate(
+                user_name=actor,
+                action=f"Human Review {decision}",
+                details=(
+                    f"Human Review {decision} | email_id={email_id} | "
+                    f"distributor={scope['distributor']} | location={scope['location']} | "
+                    f"segment={scope['segment']} | period={scope['period']} | "
+                    f"outcome={outcome} | rows_inserted={int(result.get('records_inserted') or 0)}"
+                ),
+                entity_type="email",
+                entity_id=str(email_id),
+                module="Email Extraction",
+                status="Success",
+                extra_metadata={
+                    "action": decision,
+                    "distributor": scope["distributor"],
+                    "location": scope["location"],
+                    "segment": scope["segment"],
+                    "period": scope["period"],
+                    "periods": scope["periods"],
+                    "outcome": outcome,
+                    "user": actor,
+                    "timestamp": utc_now().isoformat(),
+                },
+            )
+        )
+        return {
+            "email_id": email_id,
+            "action": decision,
+            "outcome": outcome,
+            "status": email.process_status,
+            "records_inserted": int(result.get("records_inserted") or 0),
+            "reporting_quarter": result.get("reporting_quarter") or scope["period"],
+        }

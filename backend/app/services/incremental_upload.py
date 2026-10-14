@@ -100,6 +100,17 @@ def transaction_date_of(row: Mapping[str, Any]) -> str:
     return ""
 
 
+def _when_key(row: Mapping[str, Any], period: str) -> str:
+    """Calendar month; rows without any month fall back to their FY quarter so Q1 ≠ Q2."""
+    when = transaction_date_of(row)
+    if when:
+        return when
+    spec = parse_quarter_label(period or "")
+    if spec and spec.kind == "quarter":
+        return spec.label
+    return ""
+
+
 def _qty(value: Any) -> Decimal:
     try:
         return Decimal(str(value if value is not None else 0)).quantize(Decimal("0.001"))
@@ -193,7 +204,7 @@ def analyse_rows(
         key = _identity(
             str(row.get("customer_name") or ""),
             str(row.get("product") or ""),
-            transaction_date_of(row),
+            _when_key(row, period),
             financial_year_of(period),
             str(row.get("location") or scope_location),
             str(row.get("segment") or scope_segment),
@@ -208,7 +219,7 @@ def analyse_rows(
         customer = str(row.get("customer_name") or row.get("customer") or "").strip()
         product = str(row.get("product") or "").strip()
         period = str(row.get("period") or row.get("reporting_quarter") or "").strip()
-        when = transaction_date_of(row)
+        when = _when_key(row, period)
         row_location = str(row.get("location") or scope_location).strip()
         row_segment = str(row.get("segment") or scope_segment).strip()
         incoming_qty = _qty(
@@ -262,15 +273,18 @@ def analyse_rows(
     new_count = sum(1 for item in classified if item["kind"] == NEW)
     exact_count = sum(1 for item in classified if item["kind"] == EXACT)
     modified_count = len(modified_rows)
-    if new_count == 0 and exact_count and modified_count == 0:
-        status = "duplicate_upload"
-        recommendation = "Duplicate upload. No records will be inserted."
-    elif exact_count or modified_count:
+    # Only a quantity change needs a reviewer. Exact duplicates are skipped, new rows are added.
+    if modified_count:
         status = "confirm_add"
         recommendation = CONFIRM_ADD_MESSAGE
+    elif new_count == 0 and exact_count:
+        status = "duplicate_upload"
+        recommendation = "Duplicate upload. No records will be inserted."
     else:
         status = "ready"
-        recommendation = f"Import {new_count} new records."
+        recommendation = f"Import {new_count} new records." + (
+            f" Skip {exact_count} exact duplicates." if exact_count else ""
+        )
     payload = {
         "analysed": len(classified),
         "new_count": new_count,
