@@ -535,8 +535,8 @@ class SalesRecordRepository(BaseRepository[SalesRecord]):
         """
         Accurate per-period rollups for the full filtered set (not the current page).
 
-        Quarterly Overview / Consolidated Data totals use ``SUM(quantity)`` as stored.
-        Consolidated Data already stores MT — no KG→MT conversion here.
+        ``totalQuantity`` is in MT: rows stored in KG are converted with
+        ``mt_quantity_expr()`` like every other consolidated total.
         Month labels are rolled into Indian FY quarter labels so Q1 = Apr+May+Jun.
         """
         from app.utils.period_calendar import parse_quarter_label
@@ -544,13 +544,12 @@ class SalesRecordRepository(BaseRepository[SalesRecord]):
         period_col = reporting_month_expr()
         company_col = company_expr()
         # Per-report grain so quarter rollups keep distinct distributors/reports.
-        # Quantity is already consolidated MT — sum as stored (no ÷1000).
         query = (
             select(
                 period_col.label("period"),
                 func.lower(company_col).label("company_key"),
                 SalesRecord.report_id.label("report_id"),
-                func.coalesce(func.sum(SalesRecord.quantity), 0).label("qty"),
+                func.coalesce(func.sum(mt_quantity_expr()), 0).label("qty"),
             )
             .select_from(SalesRecord)
             .join(Report, Report.id == SalesRecord.report_id)

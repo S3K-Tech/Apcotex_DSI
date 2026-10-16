@@ -60,6 +60,7 @@ class ImportMixin:
         replace_existing: bool = False,
         row_decisions: Optional[List[Dict[str, Any]]] = None,
         confirm_add: bool = False,
+        subject_month: str = "",
     ) -> Dict[str, Any]:
         """Persist rows. Duplicate scope returns a review payload and writes nothing."""
         path = Path(att.file_path)
@@ -76,15 +77,18 @@ class ImportMixin:
                 f"No valid rows to import after validation ({att.file_name})"
             )
         counts = {period: len(rows) for period, rows in by_period.items()}
-        hits = self._duplicate_hits_for_periods(
-            distributor_id=distributor_id,
-            company=company,
-            segment=segment,
-            location=location,
-            counts_by_period=counts,
-        )
-        review = self._combine_duplicate_review(company, hits)
         if not replace_existing:
+            subject_review = self._combine_duplicate_review(
+                company,
+                self._duplicate_hits_for_periods(
+                    distributor_id=distributor_id,
+                    company=company,
+                    segment=segment,
+                    location=location,
+                    counts_by_period=counts,
+                    source_month=subject_month,
+                ),
+            )
             return self._persist_incremental(
                 email=email,
                 att=att,
@@ -101,7 +105,16 @@ class ImportMixin:
                 row_decisions=row_decisions,
                 source_unit=source_unit,
                 confirm_add=confirm_add,
+                subject_review=subject_review,
             )
+        hits = self._duplicate_hits_for_periods(
+            distributor_id=distributor_id,
+            company=company,
+            segment=segment,
+            location=location,
+            counts_by_period=counts,
+        )
+        review = self._combine_duplicate_review(company, hits)
         if review and replace_existing:
             for hit in hits:
                 self._replace_period_scope(
@@ -207,8 +220,14 @@ class ImportMixin:
         row_decisions: Optional[List[Dict[str, Any]]],
         source_unit: str = "MT",
         confirm_add: bool = False,
+        subject_review: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Insert new rows, skip exact copies, and apply reviewer choices for changes."""
+        """Insert new rows, skip exact copies, and apply reviewer choices for changes.
+
+        ``subject_review`` means data already exists for this distributor, segment,
+        location, and period. It needs a reviewer decision even when every quantity
+        differs or every row is new; ``confirm_add`` (ADD THIS) is that decision.
+        """
         from decimal import Decimal
 
         from app.models.sales_record import SalesRecord
@@ -239,6 +258,19 @@ class ImportMixin:
             segment=segment,
         )
         shown = public_plan(plan)
+        if subject_review and not confirm_add and not row_decisions:
+            return {
+                "inserted": 0,
+                "updated": 0,
+                "exact": shown["exact_count"],
+                "was_dup": True,
+                "report": None,
+                "quarters": [],
+                "reports_created": 0,
+                "review": subject_review,
+                "plan": shown,
+                "outcome": "review",
+            }
         if needs_review(plan, row_decisions, confirm_add=confirm_add):
             shown_review = {
                 "detected": True,
@@ -392,7 +424,12 @@ class ImportMixin:
             last_report = report
             quarters_imported.append(period)
         kept = sum(1 for item in plan.get("rows") or [] if chosen.get(int(item["row_index"])) == KEEP)
-        added = sum(1 for item in plan.get("rows") or [] if chosen.get(int(item["row_index"])) == ADD)
+        added = sum(
+            1
+            for item in plan.get("rows") or []
+            if chosen.get(int(item["row_index"])) == ADD
+            or (confirm_add and item["kind"] == "modified")
+        )
         self.audit.log(
             AuditTrailCreate(
                 user_name=actor,
@@ -435,12 +472,17 @@ class ImportMixin:
         replace_existing: bool = False,
         row_decisions: Optional[List[Dict[str, Any]]] = None,
         confirm_add: bool = False,
+        review_decision: bool = False,
     ) -> Dict[str, Any]:
         """Persist approved ERP rows after accuracy + mapping review.
 
         Processes up to ``MAX_EXCEL_ATTACHMENTS_PER_EMAIL`` Excel files on the
         email. Manual ``mapping`` / client ``rows`` apply only to the primary
         (first) workbook; remaining workbooks are re-parsed server-side.
+
+        ``review_decision`` is set only by Human Review ADD. It lets a workbook below
+        ``MIN_IMPORT_ACCURACY`` through; a workbook scored 0 or with no rows is
+        still skipped.
         """
         from app.services.email_subject_service import EmailSubjectService
 
@@ -488,7 +530,15 @@ class ImportMixin:
         subject_meta = parse_email_subject(email.subject)
         subject_month = str(subject_meta.get("source_month") or "").strip()
         source_unit = str(subject_meta.get("unit") or email.parsed_unit or "MT").strip() or "MT"
-        subject_period = (email.detected_quarter or reporting_quarter or "").strip()
+        # Never fall back to a workbook-detected or client-supplied period.
+        subject_period = str(subject_meta.get("period") or "").strip()
+        if not subject_period:
+            from app.utils.email_subject_parser import MISSING_PERIOD_MESSAGE
+
+            raise ValidationAppError(
+                MISSING_PERIOD_MESSAGE,
+                details={"email_id": email.id, "subject": email.subject},
+            )
         from app.erp_parser.documents.row_quarters import subject_fiscal_year_start
 
         subject_fy = subject_fiscal_year_start(email.subject)
@@ -578,7 +628,7 @@ class ImportMixin:
                 continue
 
             overall = float((preview.get("confidence") or {}).get("overall") or 0)
-            if overall < MIN_IMPORT_ACCURACY:
+            if overall < MIN_IMPORT_ACCURACY and not (review_decision and overall > 0):
                 workbook_skips.append(
                     {
                         "workbook": att.file_name,
@@ -653,6 +703,7 @@ class ImportMixin:
                 replace_existing=replace_existing,
                 row_decisions=row_decisions,
                 confirm_add=confirm_add,
+                subject_month=subject_month,
             )
             inserted = int(saved.get("inserted") or 0)
             was_dup = bool(saved.get("was_dup"))
@@ -837,7 +888,7 @@ class ImportMixin:
         from app.utils.period_calendar import fy_quarter_label, parse_quarter_label
 
         meta = try_parse_email_subject(email.subject) or {}
-        period = str(meta.get("period") or email.detected_quarter or "").strip()
+        period = str(meta.get("period") or "").strip()
         spec = parse_quarter_label(period)
         labels: List[str] = []
         months: set = set()
@@ -850,6 +901,9 @@ class ImportMixin:
         elif spec:
             labels.append(spec.label)
             months.update(m.casefold() for m in spec.months)
+        subject_month = str(meta.get("source_month") or "").strip()
+        if subject_month:
+            months = {subject_month.casefold()}
         return {
             "distributor": (email.parsed_distributor or "").strip(),
             "location": (email.parsed_location or "").strip(),
@@ -930,6 +984,8 @@ class ImportMixin:
             "subject": email.subject,
             "status": email.process_status,
             "reviewable": (email.process_status or "") in self._REVIEWABLE_STATUSES,
+            # Low confidence and an existing subject identity are separate reasons for review.
+            "low_confidence": (email.process_status or "") == EmailProcessStatus.HUMAN_REVIEW.value,
             "distributor_id": dist["id"] if dist else None,
             "incoming": {
                 "distributor": scope["distributor"],
@@ -961,7 +1017,9 @@ class ImportMixin:
         scope = self._incoming_scope(email)
         result: Dict[str, Any] = {}
         if decision == "ADD":
-            result = self.import_approved(email_id=email_id, actor=actor, confirm_add=True)
+            result = self.import_approved(
+                email_id=email_id, actor=actor, confirm_add=True, review_decision=True
+            )
             outcome = (
                 "duplicate_upload" if result.get("duplicate_upload") else "imported"
             )

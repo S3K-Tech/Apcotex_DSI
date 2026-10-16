@@ -360,6 +360,12 @@ class UserManagementService:
             role_val = role.value if hasattr(role, "value") else str(role)
             if role_val == UserRole.SUPER_ADMIN.value:
                 raise ForbiddenError("Cannot assign Super Admin role to a database user")
+            if (
+                user.role == UserRole.ADMIN.value
+                and role_val == UserRole.USER.value
+                and not self._is_super_admin(actor_role)
+            ):
+                raise ForbiddenError("Only Super Admin can demote an Admin to Sales Owner")
             data["role"] = role_val
 
         if "outlook_sync_permission" in data and data["outlook_sync_permission"] is not None:
@@ -412,6 +418,7 @@ class UserManagementService:
     ) -> User:
         """Promote/demote between admin and sales owner (Admin or Super Admin)."""
         user = self.users.get_or_raise(user_id)
+        self._ensure_can_manage(user, actor_role=actor_role)
         new_role = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
         if new_role == UserRole.SUPER_ADMIN.value:
             raise ForbiddenError("Cannot assign Super Admin role to a database user")

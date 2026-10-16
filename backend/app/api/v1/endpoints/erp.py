@@ -234,9 +234,10 @@ def review_decision(
     email = service.emails.get_or_raise(email_id)
     _ensure_email_access(current, db, email, check_segment=True)
     result = service.resolve_review(email_id, action=payload.action, actor=current.name)
-    message = (
-        "Incoming data rejected. Existing data kept."
-        if result["action"] == "DELETE"
-        else f"Added {result['records_inserted']} sales rows"
-    )
+    if result["action"] == "DELETE":
+        message = "Incoming data rejected. Existing data kept."
+    elif result["outcome"] == "duplicate_upload":
+        message = "No records added. Every incoming row already exists."
+    else:
+        message = f"Added {result['records_inserted']} sales rows"
     return DataResponse(data=result, message=message)

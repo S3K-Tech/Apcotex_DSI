@@ -100,6 +100,8 @@ export function UserManagement() {
     if (target.role === 'admin') return isSuperAdminRole(userRole);
     return true;
   };
+  const canManageUser = (target: { role: string }) =>
+    target.role !== 'super_admin' || isSuperAdminRole(userRole);
   const [activeTab, setActiveTab] = useState<ActiveTab>('matrix');
   const [rows, setRows] = useState<ManagedUser[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1500,7 +1502,7 @@ export function UserManagement() {
                                   type="radio"
                                   name={`outlook-sync-${user.id}`}
                                   checked={syncPerm === opt.value}
-                                  disabled={busy}
+                                  disabled={busy || !canManageUser(user)}
                                   onChange={() => void handleOutlookSyncPermission(user, opt.value)}
                                 />
                                 {opt.label}
@@ -1510,6 +1512,7 @@ export function UserManagement() {
                         </td>
                         <td style={{ padding: '14px 20px', textAlign: 'right' }}>
                           <div style={{ display: 'inline-flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', position: 'relative' }}>
+                            {canManageUser(user) && (<>
                             <button
                               type="button"
                               onClick={() => void openDistributors(user)}
@@ -1653,6 +1656,7 @@ export function UserManagement() {
                                 </div>
                               )}
                             </div>
+                            </>)}
 
                             {canDeleteUser(user) && (
                               <button

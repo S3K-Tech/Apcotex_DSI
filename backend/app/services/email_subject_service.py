@@ -36,7 +36,12 @@ class EmailSubjectService:
 
         Returns ``True`` when subject is valid; sets ``INVALID_SUBJECT`` status otherwise.
         """
-        if skip_if_valid and email.subject_valid and email.parsed_distributor:
+        if (
+            skip_if_valid
+            and email.subject_valid
+            and email.parsed_distributor
+            and subject_parse_error(email.subject) is None
+        ):
             return True
 
         try:
@@ -77,9 +82,8 @@ class EmailSubjectService:
         email.parsed_distributor = parsed["distributor"]
         email.parsed_location = parsed["location"]
         email.parsed_segment = parsed["segment"]
-        # Optional 4th part: Q2 FY 2025-26 / FY 2025-26 — prefer over workbook detection later
-        if parsed.get("period"):
-            email.detected_quarter = parsed["period"]
+        # The subject period is mandatory and always wins over workbook detection.
+        email.detected_quarter = parsed["period"]
         email.parsed_unit = parsed.get("unit") or "MT"
         email.subject_valid = True
         if email.process_status == EmailProcessStatus.INVALID_SUBJECT.value:
@@ -115,10 +119,11 @@ class EmailSubjectService:
 
     @staticmethod
     def require_valid_subject(email: EmailMessage) -> None:
-        """Raise when email subject is not in the expected pipe format."""
-        if not email.subject_valid or not email.parsed_distributor:
+        """Raise when the subject is invalid now, even if it was flagged valid earlier."""
+        error = subject_parse_error(email.subject)
+        if error or not email.subject_valid or not email.parsed_distributor:
             raise ValidationAppError(
-                subject_parse_error(email.subject)
+                error
                 or "Invalid email subject. Expected: DISTRIBUTOR NAME | LOCATION | SEGMENT | PERIOD",
                 details={"email_id": email.id, "subject": email.subject},
             )

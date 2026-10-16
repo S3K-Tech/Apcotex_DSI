@@ -120,8 +120,10 @@ class DuplicateMixin:
         period: str,
         segment: str,
         location: str,
+        source_month: str = "",
     ) -> int:
-        from sqlalchemy import func, select
+        """Active rows in the scope. ``source_month`` narrows it to that month plus month-less rows."""
+        from sqlalchemy import func, or_, select
 
         from app.models.report import Report
         from app.models.sales_record import SalesRecord
@@ -129,6 +131,14 @@ class DuplicateMixin:
         _period_key, filters = self._period_scope_filters(
             distributor_id, period, segment, location
         )
+        month = (source_month or "").strip().lower()
+        if month:
+            filters.append(
+                or_(
+                    func.lower(func.trim(SalesRecord.source_month)) == month,
+                    func.coalesce(func.trim(SalesRecord.source_month), "") == "",
+                )
+            )
         query = (
             select(func.count(SalesRecord.id))
             .select_from(SalesRecord)
@@ -188,13 +198,14 @@ class DuplicateMixin:
         segment: str,
         location: str,
         counts_by_period: Dict[str, int],
+        source_month: str = "",
     ) -> List[Dict[str, Any]]:
         hits: List[Dict[str, Any]] = []
         for period, new_rows in counts_by_period.items():
             if not period or new_rows <= 0:
                 continue
             existing = self._count_period_scope(
-                distributor_id, period, segment, location
+                distributor_id, period, segment, location, source_month
             )
             if existing <= 0:
                 continue
@@ -207,6 +218,39 @@ class DuplicateMixin:
                 )
             )
         return hits
+
+    def _subject_duplicate_review(
+        self,
+        *,
+        distributor_id: int,
+        company: str,
+        segment: str,
+        location: str,
+        rows: Sequence[Any],
+        source_month: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Existing data with the submission's subject identity, independent of quantities.
+
+        Identity is distributor + segment + location + reporting period (each row's own
+        quarter; the subject month for a monthly subject). Rows held for period review
+        are not importable and are ignored.
+        """
+        counts: Dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict) or row.get("human_review"):
+                continue
+            period = str(row.get("period") or row.get("reporting_quarter") or "").strip()
+            if period:
+                counts[period] = counts.get(period, 0) + 1
+        hits = self._duplicate_hits_for_periods(
+            distributor_id=distributor_id,
+            company=company,
+            segment=segment,
+            location=location,
+            counts_by_period=counts,
+            source_month=source_month,
+        )
+        return self._combine_duplicate_review(company, hits)
 
     def _replace_period_scope(
         self,

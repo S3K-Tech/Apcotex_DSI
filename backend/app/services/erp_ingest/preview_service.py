@@ -99,11 +99,11 @@ class PreviewMixin:
         if not attachments:
             raise ValidationAppError("No Excel, PDF, or Word attachment found for this email")
 
-        subject_period = (email.detected_quarter or "").strip()
         from app.erp_parser.documents.row_quarters import assign_row_periods
-        from app.utils.email_subject_parser import try_parse_email_subject
+        from app.utils.email_subject_parser import parse_email_subject
 
-        subject_meta = try_parse_email_subject(email.subject) or {}
+        subject_meta = parse_email_subject(email.subject)
+        subject_period = str(subject_meta.get("period") or "").strip()
         from app.erp_parser.documents.row_quarters import subject_fiscal_year_start
 
         fiscal_year_start = subject_fiscal_year_start(email.subject) or fiscal_year_start
@@ -341,7 +341,15 @@ class PreviewMixin:
                     segment=str(email.parsed_segment or ""),
                 )
             )
-            preview["duplicate_review"] = None
+            matched = matches[0] if matches else {}
+            preview["duplicate_review"] = self._subject_duplicate_review(
+                distributor_id=int(preview["distributor_id"]),
+                company=str(matched.get("company") or matched.get("name") or ""),
+                segment=str(email.parsed_segment or ""),
+                location=str(email.parsed_location or ""),
+                rows=merged_rows,
+                source_month=str(subject_meta.get("source_month") or ""),
+            )
         else:
             preview["duplicate_review"] = None
             preview["incremental_analysis"] = None
@@ -359,9 +367,12 @@ class PreviewMixin:
                 email.confidence_score = 0
                 email.error_message = "Could not detect structured sales table"
             elif scored < 70:
+                # Low confidence. A subject duplicate stays reported in duplicate_review.
                 email.process_status = EmailProcessStatus.HUMAN_REVIEW.value
                 email.error_message = None
-            elif str((preview.get("incremental_analysis") or {}).get("status") or "") in {
+            elif preview.get("duplicate_review") or str(
+                (preview.get("incremental_analysis") or {}).get("status") or ""
+            ) in {
                 "confirm_add",
                 "human_review",
             } or int((preview.get("incremental_analysis") or {}).get("modified_count") or 0) > 0:

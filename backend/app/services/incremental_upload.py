@@ -347,7 +347,11 @@ def rows_for_insert(
     *,
     confirm_add: bool = False,
 ) -> List[Dict[str, Any]]:
-    """New rows, plus modified rows the reviewer chose to add as a new version."""
+    """New rows, plus modified rows added as a new version.
+
+    ``confirm_add`` (Human Review ADD THIS) adds every modified row; otherwise only the
+    rows the reviewer marked ADD. Exact copies are never inserted.
+    """
     chosen = decision_map(decisions)
     selected: List[Dict[str, Any]] = []
     for item in plan.get("rows") or []:
@@ -355,7 +359,7 @@ def rows_for_insert(
         index = int(item["row_index"])
         if kind == NEW:
             selected.append(dict(incoming[index]))
-        elif kind == MODIFIED and not confirm_add and chosen.get(index) == ADD:
+        elif kind == MODIFIED and (confirm_add or chosen.get(index) == ADD):
             selected.append(dict(incoming[index]))
     return selected
 

@@ -17,7 +17,7 @@ import {
 } from '../../services/emails.service';
 import { ApiError, getSession } from '../../api';
 import { isAdminRole } from '../../utils/rbac';
-import { formatPeriodDisplay, fyQuarterLabel } from '../../utils/quarter';
+import { formatPeriodDisplay } from '../../utils/quarter';
 
 /** Max unread emails per Sync Outlook click; max ready emails per Proceed batch. */
 const BATCH_LIMIT = 5;
@@ -72,6 +72,13 @@ function isScoreRunning(email: EmailRecord): boolean {
 function isHumanReview(email: EmailRecord): boolean {
   const label = (email.statusLabel || '').toLowerCase();
   return label === 'human review required' || label === 'human review';
+}
+
+/** human_review = low parser confidence; incremental_review = data already exists for this subject. */
+function humanReviewReason(email: EmailRecord): string {
+  return (email.processStatus || '').toLowerCase() === 'human_review'
+    ? 'Human Review · Low confidence'
+    : 'Human Review · Possible duplicate';
 }
 
 function reviewPeriodLabel(summary: ReviewSummary): string {
@@ -166,6 +173,7 @@ export function EmailsModule() {
   const isAdmin = isAdminRole(getSession()?.role);
   const [extracting, setExtracting] = useState(false);
   const [emails, setEmails] = useState<EmailRecord[]>([]);
+  const [emailsLoaded, setEmailsLoaded] = useState(false);
   const [autoSyncStatus, setAutoSyncStatus] = useState<{
     status: string;
     frequency: string;
@@ -192,6 +200,7 @@ export function EmailsModule() {
   const refreshEmails = async () => {
     const data = await EmailsService.getExtractedEmails();
     setEmails(data);
+    setEmailsLoaded(true);
     setSelectedEmailId(prev =>
       prev != null && data.some(e => e.id === prev) ? prev : null,
     );
@@ -207,7 +216,9 @@ export function EmailsModule() {
   };
 
   useEffect(() => {
-    refreshEmails().catch(() => undefined);
+    refreshEmails().catch(err => {
+      setError(err instanceof ApiError ? err.message : 'Failed to load emails');
+    });
     refreshAutoSyncStatus().catch(() => undefined);
   }, []);
 
@@ -269,12 +280,16 @@ export function EmailsModule() {
     reviewRequestId.current += 1;
     setReview(null);
     setError(null);
+    const inserted = result.records_inserted ?? 0;
+    const period = result.reporting_quarter ? ` (${formatPeriodDisplay(result.reporting_quarter)})` : '';
     setSyncMessage(
       action === 'DELETE'
         ? 'Incoming data rejected. Existing data kept.'
         : result.outcome === 'duplicate_upload'
-          ? 'No new records to add. Existing data kept.'
-          : `Added ${result.records_inserted ?? 0} sales rows for ${segment || 'this segment'}.`,
+          ? 'No records added. Every incoming row already exists, so identical rows were skipped. Existing data kept.'
+          : inserted === 0
+            ? 'ADD completed, but no new rows were inserted.'
+            : `Added ${inserted} sales rows for ${segment || 'this segment'}${period}.`,
     );
     try {
       await refreshEmails();
@@ -311,7 +326,16 @@ export function EmailsModule() {
             resultMsg = `Sync ${finalJob.status}: found ${finalJob.emails_found}, processed ${finalJob.emails_processed}.`;
           }
         }
-        setSyncMessage(resultMsg);
+        if (status === 'failed' || status === 'partial') {
+          setSyncMessage(null);
+          setError(
+            finalJob.error_message && !resultMsg.includes(finalJob.error_message)
+              ? `${resultMsg} ${finalJob.error_message}`
+              : resultMsg,
+          );
+        } else {
+          setSyncMessage(resultMsg);
+        }
       }
 
       await refreshEmails();
@@ -358,22 +382,6 @@ export function EmailsModule() {
     const matches = data.distributor_matches || [];
     if (matches.length === 1 && !data.distributor_unknown) return Number(matches[0].id);
     return null;
-  };
-
-  const resolveReportingQuarter = (
-    data: ERPPreviewResponse,
-    email: EmailRecord,
-  ): { reporting_quarter?: string; fiscal_year_start?: number } => {
-    if (data.monthly_pivot) {
-      const fy = Number(data.fiscal_year_start || fiscalYearStart || 2025);
-      return { reporting_quarter: fyQuarterLabel(fy, 1), fiscal_year_start: fy };
-    }
-    const detected =
-      (data.detected_quarter || email.quarter || '').trim() ||
-      (data.rows || [])
-        .map(r => (r.period || r.reporting_quarter || '').trim())
-        .find(Boolean);
-    return detected ? { reporting_quarter: detected } : {};
   };
 
   const runBatchConsolidate = async () => {
@@ -454,30 +462,24 @@ export function EmailsModule() {
             continue;
           }
           if (data.fiscal_year_start) setFiscalYearStart(Number(data.fiscal_year_start));
-          const periodArgs = resolveReportingQuarter(data, email);
-          if (!periodArgs.reporting_quarter && !data.monthly_pivot) {
-            results.push({
-              emailId: email.id,
-              subject: email.subject,
-              status: 'skipped',
-              detail: 'Quarter not detected',
-            });
-            setBatchResults([...results]);
-            continue;
-          }
           const result = await EmailsService.importErp({
             email_id: email.id,
             distributor_id: distId,
-            reporting_quarter: periodArgs.reporting_quarter,
-            fiscal_year_start: periodArgs.fiscal_year_start,
+            fiscal_year_start: data.fiscal_year_start ?? undefined,
             rows: data.rows,
           });
+          const skipNotes = (result.workbook_skips || []).map(
+            s => `Skipped ${s.workbook ? `${s.workbook}: ` : ''}${s.reason || 'not imported'}`,
+          );
           if (result.duplicate_upload) {
             results.push({
               emailId: email.id,
               subject: email.subject,
-              status: 'ok',
-              detail: 'Duplicate Upload. No records inserted.',
+              status: 'skipped',
+              detail: [
+                'Duplicate upload. Every row already exists, so identical rows were skipped. No records inserted.',
+                ...skipNotes,
+              ].join('\n'),
               rows: 0,
             });
             setBatchResults([...results]);
@@ -488,28 +490,44 @@ export function EmailsModule() {
               emailId: email.id,
               subject: email.subject,
               status: 'skipped',
-              detail:
-                result.duplicate_review?.message ||
-                'Duplicate records detected for this Financial Year & Quarter. Review before proceeding.',
+              detail: [
+                `Possible duplicate, sent to Human Review. ${
+                  result.duplicate_review?.message ||
+                  'Duplicate records detected for this Financial Year & Quarter. Review before proceeding.'
+                }`,
+                ...skipNotes,
+              ].join('\n'),
             });
             setBatchResults([...results]);
             continue;
           }
-          totalRows += result.records_inserted || 0;
-          const qLabel =
-            result.quarters_imported?.length
-              ? result.quarters_imported.map(formatPeriodDisplay).join(', ')
-              : formatPeriodDisplay(result.reporting_quarter || '');
+          const inserted = result.records_inserted || 0;
+          if (inserted === 0) {
+            results.push({
+              emailId: email.id,
+              subject: email.subject,
+              status: 'skipped',
+              detail: ['No records inserted.', ...skipNotes].join('\n'),
+              rows: 0,
+            });
+            setBatchResults([...results]);
+            continue;
+          }
+          totalRows += inserted;
+          const quarters = result.quarters_imported?.length
+            ? result.quarters_imported
+            : [result.reporting_quarter].filter(Boolean);
           const wbCount = result.workbooks_imported?.length || 1;
-          const skipN = result.workbook_skips?.length || 0;
           results.push({
             emailId: email.id,
             subject: email.subject,
             status: 'ok',
-            detail: `${result.records_inserted} rows / ${wbCount} workbook(s)${
-              skipN ? `, ${skipN} skipped` : ''
-            } (${qLabel})`,
-            rows: result.records_inserted,
+            detail: [
+              `${inserted} rows / ${wbCount} workbook(s)`,
+              ...quarters.map(q => `Imported into ${formatPeriodDisplay(q)}`),
+              ...skipNotes,
+            ].join('\n'),
+            rows: inserted,
           });
         } catch (err) {
           results.push({
@@ -763,7 +781,11 @@ export function EmailsModule() {
       <div style={{ background: 'white', border: `1px solid ${BORDER}`, borderRadius: 12, overflow: 'hidden' }}>
         {emails.length === 0 ? (
           <div style={{ padding: 48, textAlign: 'center', color: '#9CA3AF' }}>
-            No emails yet. Click Sync Outlook to download ERP attachments.
+            {emailsLoaded
+              ? 'No emails yet. Click Sync Outlook to download ERP attachments.'
+              : error
+                ? 'Emails could not be loaded. See the error above.'
+                : 'Loading emails…'}
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -849,7 +871,7 @@ export function EmailsModule() {
                               Subject: {email.subject || '—'}
                             </span>
                           </div>
-                        ) : (email.statusLabel || '').toLowerCase() === 'human review required' ? (
+                        ) : isHumanReview(email) ? (
                           <span
                             style={{
                               display: 'inline-flex',
@@ -861,7 +883,7 @@ export function EmailsModule() {
                               background: 'rgba(245,158,11,0.16)',
                             }}
                           >
-                            Human Review Required
+                            {humanReviewReason(email)}
                           </span>
                         ) : (email.statusLabel || '').toLowerCase() === 'duplicate upload' ? (
                           <span
@@ -1086,7 +1108,7 @@ export function EmailsModule() {
                         >
                           {r.status}
                         </td>
-                        <td style={td}>{r.detail}</td>
+                        <td style={{ ...td, whiteSpace: 'pre-line' }}>{r.detail}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1276,6 +1298,12 @@ export function EmailsModule() {
                   </div>
                 )}
 
+                {review.summary.low_confidence && (
+                  <p style={{ margin: '0 0 8px', fontSize: '0.8125rem', color: '#92400E', lineHeight: 1.5 }}>
+                    Low confidence: the workbook mapping scored below 70%. Check the mapped data before
+                    choosing ADD THIS.
+                  </p>
+                )}
                 <p style={{ margin: '0 0 16px', fontSize: '0.8125rem', color: '#6B7280', lineHeight: 1.5 }}>
                   {review.summary.same_segment_exists
                     ? 'This segment already has records for this period. ADD THIS stores only rows that do not exist yet; existing rows are not overwritten.'

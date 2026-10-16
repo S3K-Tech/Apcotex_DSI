@@ -1,6 +1,6 @@
-"""Parse distributor email subjects: ``DISTRIBUTOR | LOCATION | SEGMENT [| PERIOD]``.
+"""Parse distributor email subjects: ``DISTRIBUTOR | LOCATION | SEGMENT | PERIOD [| UNIT]``.
 
-Period forms (Indian FY Apr–Mar):
+The reporting period is mandatory. Period forms (Indian FY Apr–Mar):
   Monthly   — ``APRIL 2026`` (stored as FY quarter; month is never kept)
   Quarterly — ``Q2 FY 2025-26``
   Annual    — ``FY 2025-26``
@@ -9,7 +9,7 @@ Also accepts ``FY 2025-26 • Q2``, legacy ``Q2 2025``, and ``Full Year 2025``.
 Canonical stored period: ``FY 2025-26 • Q2`` or ``FY 2025-26``.
 
 Resolved fields also include ``financial_year`` (e.g. ``FY 2025-26``) and
-``quarter`` (e.g. ``Q2``) when the period is present.
+``quarter`` (e.g. ``Q2``) for single-quarter periods.
 """
 
 from __future__ import annotations
@@ -36,6 +36,11 @@ EXPECTED_SUBJECT_FORMAT = "DISTRIBUTOR NAME | LOCATION | SEGMENT | PERIOD | UNIT
 EXPECTED_SUBJECT_EXAMPLE = "Chaudhury | South | Rubber | Q2 FY 2025-26 | MT"
 EXPECTED_SUBJECT_EXAMPLE_YEAR = "Chaudhury | South | Rubber | FY 2025-26 | KG"
 EXPECTED_SUBJECT_EXAMPLE_MONTH = "Reda | South | Construction | APRIL 2026 | KG"
+MISSING_PERIOD_MESSAGE = (
+    "Invalid email subject. The reporting period is missing. Add a month (APRIL 2026), "
+    "a quarter (Q2 FY 2025-26), or a financial year (FY 2025-26) as the 4th part. "
+    f"Expected: {EXPECTED_SUBJECT_FORMAT} (example: {EXPECTED_SUBJECT_EXAMPLE_MONTH})"
+)
 
 _UNIT_CANONICAL = {
     "KG": "KG",
@@ -84,7 +89,7 @@ _FY_ANNUAL_RE = re.compile(
 # Full Year 2025 / Complete Year / Annual / FY 2025 (single year = FY start)
 _FULL_YEAR_RE = re.compile(
     r"^(?:full\s*year|complete\s*year|whole\s*year|annual|fy|year)"
-    r"[\s\-–—/]*(\d{4})(?:\s*[-–—/]\s*\d{2,4})?$",
+    r"[\s\-–—/]*(\d{4})(?:\s*[-–—/]\s*(\d{2,4}))?$",
     re.IGNORECASE,
 )
 # Legacy: Q2 2025 (year = FY start)
@@ -245,7 +250,7 @@ def normalize_subject_period(raw: Optional[str]) -> Optional[str]:
             return fy_annual_label(fy_start)
 
     m = _FULL_YEAR_RE.match(text)
-    if m:
+    if m and (not m.group(2) or _fy_end_ok(int(m.group(1)), m.group(2))):
         return fy_annual_label(int(m.group(1)))
 
     m = _LEGACY_Q_RE.match(text)
@@ -307,7 +312,8 @@ def parse_email_subject(subject: Optional[str]) -> Dict[str, Any]:
     """
     Parse ``DISTRIBUTOR | LOCATION | SEGMENT | PERIOD | UNIT``.
 
-    PERIOD examples: ``APRIL 2026``, ``Q2 FY 2026-27``, ``FY 2026-27``.
+    PERIOD is required: ``APRIL 2026``, ``Q2 FY 2026-27``, ``FY 2026-27``, ``Q1+Q2 FY 2026-27``.
+    A subject without one is rejected; the period is never taken from the workbook.
     UNIT examples: ``KG``, ``MT``, ``TON``, ``TONS``. Unit is optional for older subjects.
     Returns distributor, location, segment, period, financial_year, quarter,
     source_month, and unit.
@@ -336,9 +342,10 @@ def parse_email_subject(subject: Optional[str]) -> Dict[str, Any]:
 
     raw_parts = [p.strip() for p in _SUBJECT_SPLIT_RE.split(raw) if p.strip()]
     parts = [_title_value(p) for p in raw_parts]
+    # Three parts reach the explicit missing-period error below.
     if len(parts) not in (3, 4, 5):
         raise ValidationAppError(
-            f"Invalid email subject. Expected 3 to 5 parts: {EXPECTED_SUBJECT_FORMAT} "
+            f"Invalid email subject. Expected 4 or 5 parts: {EXPECTED_SUBJECT_FORMAT} "
             f"(examples: {EXPECTED_SUBJECT_EXAMPLE_MONTH} · {EXPECTED_SUBJECT_EXAMPLE})",
             details={
                 "subject": subject,
@@ -375,12 +382,20 @@ def parse_email_subject(subject: Optional[str]) -> Dict[str, Any]:
             },
         )
 
+    if not (period_token or "").strip():
+        raise ValidationAppError(
+            MISSING_PERIOD_MESSAGE,
+            details={
+                "subject": subject,
+                "period": None,
+                "expected": EXPECTED_SUBJECT_FORMAT,
+                "example": EXPECTED_SUBJECT_EXAMPLE_MONTH,
+            },
+        )
+
     # Period token stays in its original spelling so FY parsing is unchanged.
-    period = None
-    source_month = None
-    if period_token:
-        source_month = source_month_from_period_token(period_token)
-        period = normalize_subject_period(period_token)
+    source_month = source_month_from_period_token(period_token)
+    period = normalize_subject_period(period_token)
 
     financial_year: Optional[str] = None
     quarter: Optional[str] = None

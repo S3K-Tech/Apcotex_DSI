@@ -137,7 +137,10 @@ export type ReviewExistingRow = {
 };
 
 export type ReviewSummary = {
+  status?: string;
   reviewable: boolean;
+  /** True when the email is in Human Review because parser confidence is below 70%. */
+  low_confidence?: boolean;
   incoming: {
     distributor?: string;
     location?: string;
@@ -153,6 +156,7 @@ export type ReviewDecisionResult = {
   action?: string;
   outcome?: string;
   records_inserted?: number;
+  reporting_quarter?: string | null;
 };
 
 export const EmailsService = {

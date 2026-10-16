@@ -101,6 +101,19 @@ function segmentOf(report: ReportSalesGroup): string {
   return [...new Set(values)].join(', ');
 }
 
+/**
+ * In report paging the API filters reports by segment but returns every line of a matched
+ * report, so a report holding two segments must be narrowed to the selected one.
+ */
+function narrowToSegment(groups: ReportSalesGroup[], segment: string): ReportSalesGroup[] {
+  const wanted = segment.trim().toLowerCase();
+  if (!wanted) return groups;
+  return groups.map(group => {
+    const sales = group.sales.filter(s => (s.segment || '').trim().toLowerCase() === wanted);
+    return sales.length === group.sales.length ? group : { ...group, sales, recordCount: sales.length };
+  });
+}
+
 /** Location stamped from email subject onto sales lines for this report. */
 function locationOf(report: ReportSalesGroup): string {
   const fromReport = (report.location || '').trim();
@@ -273,12 +286,13 @@ export function ConsolidatedData() {
         ConsolidatedDataService.getSalesRecords(query),
         ConsolidatedDataService.getFilterOptions(),
       ]);
-      setReportGroups(pageResult.data);
+      const groups = narrowToSegment(pageResult.data, appliedFilters.segment);
+      setReportGroups(groups);
       setTotal(pageResult.total);
       setTotalReports(pageResult.totalReports ?? pageResult.data.length);
       setPeriodSummaries(pageResult.periodSummaries || []);
       setFilterOptions(options);
-      syncExpanded(pageResult.data);
+      syncExpanded(groups);
       setLoaded(true);
     } catch (err) {
       setLoaded(false);
@@ -286,7 +300,7 @@ export function ConsolidatedData() {
     } finally {
       setLoading(false);
     }
-  }, [buildQuery, syncExpanded]);
+  }, [buildQuery, syncExpanded, appliedFilters.segment]);
 
   useEffect(() => {
     loadData();
@@ -382,7 +396,7 @@ export function ConsolidatedData() {
       const csvRows: string[] = [];
       let exportedLines = 0;
 
-      all.data.forEach(report => {
+      narrowToSegment(all.data, appliedFilters.segment).forEach(report => {
         const quarter = reportingQuarterOf(report);
         const detailLines = [
           report.distributor,
