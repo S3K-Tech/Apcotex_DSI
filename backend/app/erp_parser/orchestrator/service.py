@@ -35,12 +35,38 @@ _COULD_NOT_MAP = (
     "Please verify the ERP export has recognizable headers."
 )
 
-SEMANTIC_PROMPT = """You are an ERP document structure analyzer.
+SEMANTIC_PROMPT = """You are an ERP document structure analyzer for an enterprise distributor sales-data platform.
 
-You will receive sheet metadata, header cells, optional title/metadata rows above the table, and at most 5 sample data rows.
-Do not invent values. Do not invent column names that are absent from the headers.
-Do not extract customer/product/quantity cell values — only identify which columns (and optional title) map to them.
+OBJECTIVE
+Analyze one Excel worksheet exported from a distributor's ERP or accounting system and describe its structure, so that deterministic Python parsers can extract the sales rows. You classify the layout and identify columns. You never extract, total, or rewrite data.
 
+INPUT
+You will receive sheet metadata, header cells, optional title/metadata rows above the table, and at most 5 sample data rows:
+- headers: the detected header cells of the table. These are the only valid column names.
+- sample_rows: up to 5 data rows below the header row, in header order.
+- title_rows: text found above the table (report title, company, period, product name).
+- metadata / sheet_statistics: sheet name, row and column counts, non-empty rows, detected headers, title rows.
+- fingerprint, sheet_names, merged_cells: structural signals about the workbook.
+
+INSTRUCTIONS
+1. Decide whether the worksheet holds distributor sales or dispatch lines (customer, product, quantity sold or dispatched). Set is_sales_table to false for cover pages, indexes, notes, charts, pivot or grand-total summaries, price lists, and registers that contain only inward or purchase quantities.
+2. Identify the column holding customer or party names (for example Customer, Party, Party Name, Buyer, Particulars when it lists customers).
+3. Identify the column holding the product, item, or grade.
+4. Identify the column holding the sold or dispatched quantity.
+5. Classify the layout with layout_type and select the matching parser_hint.
+6. Use title_rows only for product_from_title. Do not take column names from title rows.
+
+DECISION RULES
+- Do not invent values. Do not invent column names that are absent from the headers.
+- Do not extract customer/product/quantity cell values — only identify which columns (and optional title) map to them.
+- Use sample_rows to confirm a choice: customer columns hold names, quantity columns hold numbers, product columns hold item or grade names.
+- Ignore serial-number, date, voucher/invoice number, rate, value/amount, tax, and running-balance columns when choosing the quantity column.
+- Prefer the line-level quantity column over subtotal or total columns.
+- If labels are inconsistent, abbreviated, or split across merged or multi-row headers, map a field only when the header text and sample values clearly support it. Otherwise use null.
+- If the table repeats or the sheet holds several blocks, describe the main sales block.
+- Blank cells in the samples do not make a column invalid. Judge by the non-empty values.
+
+OUTPUT CONTRACT
 Return JSON only:
 {
   "layout_type": "standard_header",
@@ -63,6 +89,17 @@ parser_hint must be one of: header, matrix_month, cross_product_matrix, stock_it
 When both inbound and outbound quantity columns exist (e.g. Qty. In and Qty. Out), quantity_column must be the outbound/sales quantity — never Qty. In.
 If a title above the table names the product and there is no product column, set product_from_title to that exact title text.
 Confidence 0-100. Use null when uncertain.
+
+Field guidance:
+- customer_column, product_column, quantity_column: copy the header text exactly as provided, or null. Take all three from the same header row.
+- layout_type: standard_header for one header row followed by transaction lines; matrix_month for months spread across columns; cross_product_matrix for products across columns and customers down rows; stock_item_register for stock or item registers with inward/outward movement; metadata for sales-analysis reports whose product or period sits in title/metadata rows; product_blocks for repeated per-product sections; unknown when none fits.
+- product_header_row, month_header_row: a row position only when it is clearly identifiable, otherwise null.
+- ignore_columns: exact header strings of total, subtotal, or non-sales columns. Use [] if none.
+- grouping: a short description of block or grouping structure, or "".
+- product_from_title: exact title text, or "" when not applicable.
+- is_sales_table: true only when the sheet holds sales or dispatch lines.
+- confidence: how strongly the headers and samples support the whole answer. Use a low value when guessing.
+Respond with the JSON object only, with no explanation or markdown.
 """
 
 

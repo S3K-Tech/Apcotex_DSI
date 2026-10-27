@@ -61,12 +61,49 @@ def is_known_model(value: str | None) -> bool:
 def display_name_for(value: str | None) -> str:
     """Friendly name for the UI. Unknown stored values use the default name."""
     found = _match(value or "")
-    return found.display_name if found else default_model().display_name
+    if found:
+        return found.display_name
+    embedding = embedding_model_for(value)
+    return embedding.display_name if embedding else default_model().display_name
 
 
 def rates_for(value: str | None) -> tuple[float, float]:
-    found = _match(value or "") or default_model()
+    found = _match(value or "")
+    if found is None:
+        embedding = embedding_model_for(value)
+        if embedding:
+            return embedding.input_usd_per_1m, 0.0
+        found = default_model()
     return found.input_usd_per_1m, found.output_usd_per_1m
+
+
+@dataclass(frozen=True)
+class EmbeddingModel:
+    display_name: str
+    model_id: str
+    dimensions: tuple[int, ...]
+    input_usd_per_1m: float
+
+
+# Invoked with InvokeModel (not Converse). Kept apart from generation models.
+_EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
+    EmbeddingModel(
+        "Titan Text Embeddings V2",
+        "amazon.titan-embed-text-v2:0",
+        (256, 512, 1024),
+        0.02,
+    ),
+)
+
+
+def embedding_model_for(value: str | None) -> EmbeddingModel | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    for model in _EMBEDDING_MODELS:
+        if text == model.model_id or text.casefold() == model.display_name.casefold():
+            return model
+    return None
 
 
 def provider_for(value: str | None) -> str:

@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     analytics,
     audit,
     auth,
+    chat_data,
     consolidated_data,
     dashboard,
     distributors,
@@ -39,5 +40,6 @@ api_router.include_router(audit.router)
 api_router.include_router(consolidated_data.router)
 api_router.include_router(visualizations.router)
 api_router.include_router(analytics.router)
+api_router.include_router(chat_data.router)
 api_router.include_router(settings.router)
 api_router.include_router(normalization.router)

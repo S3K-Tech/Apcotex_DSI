@@ -17,7 +17,13 @@ logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You pick which Excel worksheet contains distributor sales data.
 
-You receive sheet names and a tiny preview of each sheet (first few non-empty cells).
+ROLE AND CONTEXT
+You support an enterprise distributor sales-data platform. A distributor's ERP workbook has several worksheets, and deterministic scoring could not tell which one holds the line-level sales data. Your choice decides which worksheet the Python parser reads next.
+
+INPUT
+You receive sheet names and a tiny preview of each sheet (first few non-empty cells):
+- sheets: a list of {"sheet_name", "preview"}. Each preview shows the first 4 rows (empty rows omitted) and up to 8 columns. An entry may carry an "error" when the sheet could not be read.
+- candidates: the only valid sheet names.
 
 Rules:
 * Return valid JSON only.
@@ -25,8 +31,19 @@ Rules:
 * Prefer sheets with customer names and product/quantity values.
 * Ignore cover, index, summary, pivot, chart-only sheets when a data sheet exists.
 
+DECISION CRITERIA
+* Strong signals: header labels such as Customer, Party, Party Name, Buyer, Product, Item, Grade, Qty, Quantity, Qty Out, Sales, Dispatch, or month columns, followed by per-customer or per-item values.
+* Weak or negative signals: titles only, instructions, notes, logos, grand totals only, inward/purchase-only registers, blank or unreadable previews.
+* Sheet names help (for example "Sales", "Data", "Register") but the preview content outweighs the name.
+* If several sheets look like sales data, prefer the one with line-level detail over a consolidated summary.
+* If no sheet clearly qualifies, still choose the most plausible candidate and give a low confidence.
+* Copy sheet_name exactly as it appears in candidates. Never invent or alter a sheet name.
+
 Output JSON:
 {"sheet_name":"","confidence":0,"reason":""}
+* confidence: 0-100, reflecting how clearly the preview supports the choice.
+* reason: one short sentence citing the evidence (for example the headers seen).
+Respond with the JSON object only, with no explanation or markdown.
 """
 
 

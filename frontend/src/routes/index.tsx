@@ -5,6 +5,7 @@ import { SalesDashboard } from '../pages/Dashboard/SalesDashboard';
 import { EmailsModule } from '../pages/Outlook/EmailsModule';
 import { ConsolidatedData } from '../pages/ConsolidatedData/ConsolidatedData';
 import { Visualizations } from '../pages/Visualizations/Visualizations';
+import { ChatWithData } from '../pages/ChatWithData/ChatWithData';
 import { AuditTrail } from '../pages/AuditTrail/AuditTrail';
 import { UserManagement } from '../pages/UserManagement/UserManagement';
 import { ExistingReports } from '../pages/Reports/ExistingReports';
@@ -47,6 +48,7 @@ export const createAppRouter = (
           : [{ path: 'emails', Component: EmailsModule }]),
         { path: 'consolidated-data', Component: ConsolidatedData },
         { path: 'visualizations', Component: Visualizations },
+        { path: 'chat-with-data', Component: ChatWithData },
         { path: 'distributors', Component: DistributorManagement },
         { path: 'audit-trail', Component: AuditTrail },
         { path: 'user-management', Component: UserManagement },

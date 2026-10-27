@@ -69,6 +69,7 @@ class AuditModule(str, Enum):
     EMAILS = "Emails"
     CONSOLIDATED = "Consolidated Data"
     VISUALIZATION = "Visualization"
+    CHAT_WITH_DATA = "Chat with Data"
     MASTER_DATA = "Master Data"
     SETTINGS = "Settings"
     AUTHENTICATION = "Authentication"

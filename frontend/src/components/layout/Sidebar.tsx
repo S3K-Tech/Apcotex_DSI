@@ -11,6 +11,7 @@ import {
   LogOut,
   BookMarked,
   Shuffle,
+  MessageSquare,
 } from 'lucide-react';
 import APCOTEX_LOGO from '../../assets/images/apcotexindustrieslogo.png';
 import { BLUE, TEAL, RED, BORDER } from '../../constants/theme';
@@ -22,6 +23,7 @@ const mainNavItems = [
   { path: '/emails',            label: 'Emails',            icon: Mail, emailsOnly: true },
   { path: '/consolidated-data', label: 'Consolidated Data', icon: Table2           },
   { path: '/visualizations',    label: 'Visualizations & Analytics', icon: BarChart3        },
+  { path: '/chat-with-data',    label: 'Chat with Data',    icon: MessageSquare    },
   { path: '/distributors',      label: 'Distributors',      icon: Building2 },
   { path: '/audit-trail',       label: 'Audit Trail',       icon: ScrollText, adminOnly: true },
   { path: '/user-management',   label: 'Persona Management',  icon: Users, adminOnly: true },

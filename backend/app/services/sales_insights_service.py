@@ -889,6 +889,30 @@ class SalesInsightsService:
                 q = q.where(func.lower(SalesRecord.product).in_(lowers))
         return q
 
+    def scoped_query(
+        self,
+        query,
+        *,
+        distributor_id: Optional[int] = None,
+        product: Optional[str] = None,
+        segment: Optional[str] = None,
+        allowed_segments: Optional[List[str]] = None,
+        allowed_companies: Optional[List[str]] = None,
+    ):
+        """Active-row, RBAC and dimension filters shared with Analytics (Chat with Data)."""
+        return self._scoped(
+            query,
+            distributor_id=distributor_id,
+            customer=None,
+            product=product,
+            location=None,
+            segment=segment,
+            search=None,
+            month_keys=None,
+            allowed_segments=allowed_segments,
+            allowed_companies=allowed_companies,
+        )
+
     def _with_filter(self, query, filt: AnalyticsFilter, **scope_kw):
         """Dimension filters plus the shared financial-year / period predicate."""
         scoped = self._scoped(

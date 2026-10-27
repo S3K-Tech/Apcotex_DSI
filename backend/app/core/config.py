@@ -152,6 +152,36 @@ class Settings(BaseSettings):
     default_model: str = Field(default_factory=default_model_id, alias="DEFAULT_MODEL")
     bedrock_timeout: float = Field(default=30.0, alias="BEDROCK_TIMEOUT", gt=0)
 
+    # Chat with Data. Disabled unless CHAT_DATA_ENABLED=true.
+    chat_data_enabled: bool = Field(default=False, alias="CHAT_DATA_ENABLED")
+    # Bedrock Converse for question interpretation (falls back to rules when off/failing).
+    chat_data_use_llm: bool = Field(default=True, alias="CHAT_DATA_USE_LLM")
+    # Optional LLM wording of verified facts. Template wording is always the fallback.
+    chat_data_llm_phrasing: bool = Field(default=False, alias="CHAT_DATA_LLM_PHRASING")
+    chat_data_llm_timeout: float = Field(default=20.0, alias="CHAT_DATA_LLM_TIMEOUT", gt=0)
+    chat_data_max_question_chars: int = Field(
+        default=500, alias="CHAT_DATA_MAX_QUESTION_CHARS", ge=50, le=2000
+    )
+    chat_data_statement_timeout_ms: int = Field(
+        default=8000, alias="CHAT_DATA_STATEMENT_TIMEOUT_MS", ge=500, le=60000
+    )
+    chat_data_rate_limit_per_minute: int = Field(
+        default=20, alias="CHAT_DATA_RATE_LIMIT_PER_MINUTE", ge=1, le=600
+    )
+    # pgvector semantic matching. Requires the chat_embeddings migration and a sync run.
+    chat_semantic_search_enabled: bool = Field(
+        default=False, alias="CHAT_SEMANTIC_SEARCH_ENABLED"
+    )
+    bedrock_embedding_model: str = Field(
+        default="amazon.titan-embed-text-v2:0", alias="BEDROCK_EMBEDDING_MODEL"
+    )
+    bedrock_embedding_dimensions: int = Field(
+        default=1024, alias="BEDROCK_EMBEDDING_DIMENSIONS"
+    )
+    bedrock_embedding_timeout: float = Field(
+        default=10.0, alias="BEDROCK_EMBEDDING_TIMEOUT", gt=0
+    )
+
     # ERP Excel quantity unit. App stores/displays MT.
     # Default MT = use Excel numbers as-is (no ÷1000). Set KG only if workbook is truly kilograms.
     erp_excel_quantity_unit: str = Field(default="MT", alias="ERP_EXCEL_QUANTITY_UNIT")

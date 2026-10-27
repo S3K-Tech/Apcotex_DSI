@@ -35,6 +35,8 @@ TEST_URL = _working_url.set(database=TEST_DB_NAME)
 assert TEST_URL.database == TEST_DB_NAME and TEST_URL.database != _working_url.database
 os.environ["DATABASE_URL"] = TEST_URL.render_as_string(hide_password=False)
 
+VECTOR_AVAILABLE = False
+
 
 def _admin_engine():
     return create_engine(
@@ -63,8 +65,21 @@ def test_engine():
                 table.indexes.discard(index)
             else:
                 seen.add(index.name)
+    # chat_embeddings needs pgvector. Enable it only in this disposable database when the
+    # server already ships the extension; otherwise skip that table (vector tests skip).
+    global VECTOR_AVAILABLE
     try:
-        Base.metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        VECTOR_AVAILABLE = True
+    except Exception:  # noqa: BLE001
+        VECTOR_AVAILABLE = False
+    tables = [
+        t for t in Base.metadata.sorted_tables
+        if VECTOR_AVAILABLE or t.name != "chat_embeddings"
+    ]
+    try:
+        Base.metadata.create_all(engine, tables=tables)
         yield engine
     finally:
         engine.dispose()
@@ -87,3 +102,11 @@ def db(test_engine):
         session.close()
         outer.rollback()
         connection.close()
+
+
+@pytest.fixture()
+def vector_db(db):
+    """``db`` for tests that need the chat_embeddings (pgvector) table."""
+    if not VECTOR_AVAILABLE:
+        pytest.skip("pgvector extension is not available on the test PostgreSQL server")
+    return db

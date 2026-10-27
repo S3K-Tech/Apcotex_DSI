@@ -563,3 +563,58 @@ export interface CompanyProfile {
 }
 
 export type TabKey = 'products' | 'distributors';
+
+// ─── Chat with Data ───────────────────────────────────────────────────────────
+export type ChatDataStatus =
+  | 'answer'
+  | 'clarification'
+  | 'restricted'
+  | 'no_data'
+  | 'unsupported'
+  | 'error';
+
+/** Opaque server-validated query spec; echoed back as `previous_spec` for follow-ups. */
+export type ChatQuerySpec = Record<string, unknown>;
+
+export interface ChatDataFact {
+  key: string;
+  label: string;
+  value: number | string;
+  unit?: string | null;
+  display: string;
+}
+
+export interface ChatDataTableColumn {
+  key: string;
+  label: string;
+  numeric: boolean;
+}
+
+export interface ChatDataTable {
+  columns: ChatDataTableColumn[];
+  rows: Record<string, string | number | null>[];
+}
+
+export interface ChatDataAnswer {
+  status: ChatDataStatus;
+  message: string;
+  narrative_source: 'template' | 'llm_verified';
+  facts: ChatDataFact[];
+  table?: ChatDataTable | null;
+  unit?: string | null;
+  periods: string[];
+  filters: Record<string, string>;
+  scope_note?: string | null;
+  caveats: string[];
+  clarification?: { question: string; options: string[] } | null;
+  spec?: ChatQuerySpec | null;
+  interpreted_by: 'llm' | 'rules' | 'none';
+}
+
+export interface ChatDataAvailability {
+  enabled: boolean;
+  llm_enabled: boolean;
+  semantic_search_enabled: boolean;
+  max_question_chars: number;
+  suggestions: string[];
+}

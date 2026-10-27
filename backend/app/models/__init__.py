@@ -2,6 +2,7 @@
 
 from app.models.llm_usage_log import LlmUsageLog
 from app.models.audit_trail import AuditTrail
+from app.models.chat_embedding import ChatEmbedding
 from app.models.customer_master import CustomerMaster
 from app.models.distributor import Distributor
 from app.models.distributor_parser_profile import DistributorParserProfile
@@ -37,4 +38,5 @@ __all__ = [
     "SyncJob",
     "SystemSetting",
     "LlmUsageLog",
+    "ChatEmbedding",
 ]
