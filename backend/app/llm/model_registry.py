@@ -1,12 +1,26 @@
-"""Central Bedrock model registry.
+"""Central LLM model registry.
 
 Model ids stay in this module. The rest of the application uses display names
-or ``resolve_model_id()``. The first entry is the default.
+or ``resolve_model_id()``. The first Bedrock entry is the default.
+
+Bedrock models are fixed below. OpenAI and Gemini model ids come from the
+``OPENAI_MODELS`` / ``GEMINI_MODELS`` environment variables (comma-separated).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+BEDROCK = "bedrock"
+OPENAI = "openai"
+GEMINI = "gemini"
+
+PROVIDER_LABELS = {BEDROCK: "AWS Bedrock", OPENAI: "OpenAI", GEMINI: "Google Gemini"}
+# Environment variable holding each API provider's key. Bedrock uses the IAM role.
+PROVIDER_KEY_ENV = {OPENAI: "OPENAI_API_KEY", GEMINI: "GEMINI_API_KEY"}
+
+DEFAULT_OPENAI_MODELS = "gpt-5.4"
+DEFAULT_GEMINI_MODELS = "gemini-2.5-flash"
 
 
 @dataclass(frozen=True)
@@ -37,15 +51,62 @@ def public_model_names() -> list[str]:
     return [model.display_name for model in _MODELS]
 
 
+def _split_ids(raw: str | None, fallback: str) -> list[str]:
+    ids = [part.strip() for part in str(raw or "").split(",") if part.strip()]
+    return ids or [fallback]
+
+
+def _api_models() -> tuple[BedrockModel, ...]:
+    """OpenAI / Gemini models from settings. Pricing is not tracked (cost shows 0)."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    models: list[BedrockModel] = []
+    for provider, raw, fallback in (
+        (OPENAI, settings.openai_models, DEFAULT_OPENAI_MODELS),
+        (GEMINI, settings.gemini_models, DEFAULT_GEMINI_MODELS),
+    ):
+        for model_id in _split_ids(raw, fallback):
+            models.append(BedrockModel(model_id, model_id, 0.0, 0.0, provider=provider))
+    return tuple(models)
+
+
+def _all_models() -> tuple[BedrockModel, ...]:
+    return _MODELS + _api_models()
+
+
 def _match(value: str) -> BedrockModel | None:
     text = value.strip()
     if not text:
         return None
     folded = text.casefold()
-    for model in _MODELS:
+    for model in _all_models():
         if text == model.model_id or folded == model.display_name.casefold():
             return model
     return None
+
+
+def model_provider(value: str | None) -> str:
+    """``bedrock`` / ``openai`` / ``gemini`` for a model. Unknown values are Bedrock."""
+    found = _match(value or "")
+    if found is None or found.provider == "converse":
+        return BEDROCK
+    return found.provider
+
+
+def models_for_provider(provider: str) -> list[BedrockModel]:
+    if provider == BEDROCK:
+        return list(_MODELS)
+    return [model for model in _api_models() if model.provider == provider]
+
+
+def model_names_for(provider: str) -> list[str]:
+    return [model.display_name for model in models_for_provider(provider)]
+
+
+def default_model_for(provider: str) -> BedrockModel:
+    models = models_for_provider(provider)
+    return models[0] if models else default_model()
 
 
 def resolve_model_id(value: str | None) -> str:

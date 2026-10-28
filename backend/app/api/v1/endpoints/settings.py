@@ -50,12 +50,12 @@ def update_llm_settings(
     return DataResponse(data=data, message="LLM settings updated")
 
 
-@router.post("/bedrock/test", summary="Test a Bedrock model connection (Admin)")
+@router.post("/bedrock/test", summary="Test an LLM model connection (Admin)")
 def test_bedrock_connection(
     payload: BedrockTestRequest,
     current: RequireAdmin,
 ) -> DataResponse[dict]:
-    """Invoke the selected registry model. AWS keys are never read or stored."""
+    """Invoke the selected registry model on its provider. Keys are never returned."""
     _ = current
     from app.llm.bedrock_client import probe
 

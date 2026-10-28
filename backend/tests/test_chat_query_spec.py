@@ -133,6 +133,31 @@ def test_unknown_capitalised_name_is_kept_for_scoped_resolution():
     assert spec.filters.distributor == "Gamma Secret Corp"
 
 
+def test_customer_for_distributor_with_initials_is_not_a_customer_filter():
+    p = RuleParser(RuleHints(distributor_names=["A.B. BROTHERS", "A.B.BROTHERS"]))
+    first = p.parse("Top rank customer for A.B brothers distributor")
+    assert first.filters.customer is None and not first.periods
+    pending = first.model_copy(update={"awaiting": AwaitingField.PERIOD})
+    spec = p.parse("FY 2026-27", pending)
+    assert spec.intent == QueryIntent.RANK and spec.dimension == QueryDimension.CUSTOMER
+    assert spec.filters.customer is None
+    assert spec.filters.distributor in {"A.B. BROTHERS", "A.B.BROTHERS"}
+    assert spec.periods == [PeriodRef(fy_start=2026)]
+
+
+@pytest.mark.parametrize(
+    "question,customer",
+    [
+        ("Sales of customer A.B. Traders in FY 2026-27", "A.B. Traders"),
+        ("Sales of customer A.B. Traders Pvt. Ltd.", "A.B. Traders Pvt. Ltd"),
+        ("Sales of customer Acme Corp?", "Acme Corp"),
+        ("Top customer in FY 2026-27", None),
+    ],
+)
+def test_customer_mention_extraction(question, customer):
+    assert RuleParser().filters(question).customer == customer
+
+
 def test_follow_up_overrides_only_what_changed():
     p = RuleParser(RuleHints(distributor_names=["Alpha Traders"]))
     first = p.parse("Top 5 customers of Alpha Traders in FY 2026-27")

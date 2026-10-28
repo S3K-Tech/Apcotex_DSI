@@ -4,10 +4,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.llm.model_registry import default_model_id
+from app.llm.model_registry import DEFAULT_GEMINI_MODELS, DEFAULT_OPENAI_MODELS, default_model_id
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -151,6 +151,17 @@ class Settings(BaseSettings):
     bedrock_region: str = Field(default="", alias="BEDROCK_REGION")
     default_model: str = Field(default_factory=default_model_id, alias="DEFAULT_MODEL")
     bedrock_timeout: float = Field(default=30.0, alias="BEDROCK_TIMEOUT", gt=0)
+
+    # OpenAI / Google Gemini — optional alternatives to Bedrock, chosen in Admin Settings.
+    # Keys stay server-side: never stored in the database or returned by the API.
+    openai_api_key: SecretStr = Field(default=SecretStr(""), alias="OPENAI_API_KEY")
+    gemini_api_key: SecretStr = Field(default=SecretStr(""), alias="GEMINI_API_KEY")
+    # Comma-separated model ids offered in Settings. The first is the provider default.
+    openai_models: str = Field(default=DEFAULT_OPENAI_MODELS, alias="OPENAI_MODELS")
+    gemini_models: str = Field(default=DEFAULT_GEMINI_MODELS, alias="GEMINI_MODELS")
+    # Reasoning models spend output tokens on thinking, so these exceed Bedrock's 800.
+    openai_max_output_tokens: int = Field(default=4096, alias="OPENAI_MAX_OUTPUT_TOKENS", ge=256)
+    gemini_max_output_tokens: int = Field(default=4096, alias="GEMINI_MAX_OUTPUT_TOKENS", ge=256)
 
     # Chat with Data. Disabled unless CHAT_DATA_ENABLED=true.
     chat_data_enabled: bool = Field(default=False, alias="CHAT_DATA_ENABLED")

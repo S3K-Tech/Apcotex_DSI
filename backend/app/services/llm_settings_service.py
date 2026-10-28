@@ -1,4 +1,4 @@
-"""Admin LLM settings + usage logging (Amazon Bedrock)."""
+"""Admin LLM settings + usage logging (AWS Bedrock, OpenAI, Google Gemini)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,17 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.llm.model_registry import (
+    BEDROCK,
+    GEMINI,
+    OPENAI,
+    PROVIDER_KEY_ENV,
+    PROVIDER_LABELS,
+    default_model_for,
+    default_model_id,
     display_name_for,
     is_known_model,
-    public_model_names,
+    model_names_for,
+    model_provider,
     rates_for,
     resolve_model_id,
 )
@@ -25,7 +33,32 @@ LLM_PROVIDER_KEY = "llm_provider"
 LLM_ENABLED_KEY = "llm_enabled"
 LLM_MODEL_KEY = "llm_model"
 
-AVAILABLE_PROVIDERS = ["bedrock"]
+AVAILABLE_PROVIDERS = [BEDROCK, OPENAI, GEMINI]
+
+
+def provider_configured(provider: str) -> bool:
+    """Bedrock uses the host IAM role. API providers need their key in the environment."""
+    if provider == BEDROCK:
+        return True
+    from app.llm.provider_clients import is_configured
+
+    return is_configured(provider)
+
+
+def _provider_info(provider: str) -> Dict[str, Any]:
+    env_var = PROVIDER_KEY_ENV.get(provider)
+    return {
+        "id": provider,
+        "label": PROVIDER_LABELS[provider],
+        "models": model_names_for(provider),
+        "configured": provider_configured(provider),
+        "credential_env": env_var,
+        "credential_source": (
+            "IAM role on the host (no API key)"
+            if env_var is None
+            else f"Backend environment variable {env_var}"
+        ),
+    }
 
 # Approx USD per 1M tokens — admin cost estimates only. Rates live on the registry.
 
@@ -63,27 +96,36 @@ class LlmSettingsService:
         return raw.lower() in {"1", "true", "yes", "on"}
 
     def get_provider(self) -> str:
-        return "bedrock"
+        raw = (self._get(LLM_PROVIDER_KEY) or BEDROCK).lower()
+        return raw if raw in AVAILABLE_PROVIDERS else BEDROCK
 
     def get_model(self) -> str:
-        return resolve_model_id(self._get(LLM_MODEL_KEY) or self.env.default_model)
+        """Model id for the active provider. Never crosses providers."""
+        provider = self.get_provider()
+        stored = self._get(LLM_MODEL_KEY)
+        if provider == BEDROCK:
+            resolved = resolve_model_id(stored or self.env.default_model)
+            return resolved if model_provider(resolved) == BEDROCK else default_model_id()
+        if stored and is_known_model(stored) and model_provider(stored) == provider:
+            return resolve_model_id(stored)
+        return default_model_for(provider).model_id
 
     def get_api_key(self) -> str:
+        """Keys are never exposed. Kept for the settings payload contract."""
         return ""
 
     def get_settings_payload(self) -> Dict[str, Any]:
-        key = self.get_api_key()
-        masked = ""
-        if key:
-            masked = (key[:3] + "…" + key[-4:]) if len(key) > 8 else "••••"
+        provider = self.get_provider()
         return {
-            "provider": self.get_provider(),
+            "provider": provider,
+            "provider_label": PROVIDER_LABELS[provider],
             "enabled": self.is_enabled(),
             "model": display_name_for(self.get_model()),
-            "api_key_configured": bool(key),
-            "api_key_masked": masked,
+            "api_key_configured": provider_configured(provider),
+            "api_key_masked": "",
             "available_providers": AVAILABLE_PROVIDERS,
-            "available_models": public_model_names(),
+            "available_models": model_names_for(provider),
+            "providers": [_provider_info(item) for item in AVAILABLE_PROVIDERS],
             "timeout_seconds": float(self.env.bedrock_timeout or 30),
         }
 
@@ -95,27 +137,41 @@ class LlmSettingsService:
         model: Optional[str] = None,
         actor: str = "admin",
     ) -> Dict[str, Any]:
-        if provider is not None:
-            p = provider.strip().lower()
-            if p not in AVAILABLE_PROVIDERS:
-                from app.exceptions import ValidationAppError
+        from app.exceptions import ValidationAppError
 
+        current = self.get_provider()
+        target = current
+        if provider is not None:
+            target = provider.strip().lower()
+            if target not in AVAILABLE_PROVIDERS:
                 raise ValidationAppError(
                     f"Unsupported LLM provider '{provider}'",
                     details={"allowed": AVAILABLE_PROVIDERS},
                 )
-            self._set(LLM_PROVIDER_KEY, p)
+            if not provider_configured(target):
+                env_var = PROVIDER_KEY_ENV[target]
+                raise ValidationAppError(
+                    f"{PROVIDER_LABELS[target]} is not configured. Set {env_var} in the "
+                    "backend .env file and restart the backend.",
+                    details={"provider": target, "env_var": env_var},
+                )
+        new_model: Optional[str] = None
+        if model is not None:
+            if not is_known_model(model) or model_provider(model) != target:
+                raise ValidationAppError(
+                    f"Unsupported model '{model}' for {PROVIDER_LABELS[target]}",
+                    details={"allowed": model_names_for(target)},
+                )
+            new_model = resolve_model_id(model)
+        elif target != current:
+            new_model = default_model_for(target).model_id
+
+        if provider is not None:
+            self._set(LLM_PROVIDER_KEY, target)
         if enabled is not None:
             self._set(LLM_ENABLED_KEY, "true" if enabled else "false")
-        if model is not None:
-            if not is_known_model(model):
-                from app.exceptions import ValidationAppError
-
-                raise ValidationAppError(
-                    f"Unsupported model '{model}'",
-                    details={"allowed": public_model_names()},
-                )
-            self._set(LLM_MODEL_KEY, resolve_model_id(model))
+        if new_model is not None:
+            self._set(LLM_MODEL_KEY, new_model)
         logger.info(
             "LLM settings updated | actor={} | provider={} | enabled={} | model={}",
             actor,
@@ -142,7 +198,8 @@ class LlmSettingsService:
         if total <= 0 and prompt <= 0 and completion <= 0:
             return None
         mdl = model or self.get_model()
-        prov = provider or self.get_provider()
+        # The model decides who served the call; ERP callers pass provider="bedrock" literally.
+        prov = model_provider(mdl) if is_known_model(mdl) else (provider or self.get_provider())
         row = LlmUsageLog(
             provider=prov,
             model=mdl,
@@ -217,7 +274,7 @@ def resolve_runtime_llm(db: Optional[Session] = None) -> Dict[str, Any]:
     svc = LlmSettingsService(db)
     return {
         "enabled": svc.is_enabled(),
-        "provider": "bedrock",
+        "provider": svc.get_provider(),
         "model": svc.get_model(),
         "timeout": float(env.bedrock_timeout or 30),
     }

@@ -470,6 +470,26 @@ def _split_line(line: str, *, month_count: int) -> List[str]:
     return [_clean_cell(line)]
 
 
+def _layout_model_id() -> str:
+    """Bedrock keeps the registry default. OpenAI / Gemini use the admin-selected model."""
+    from app.llm.model_registry import BEDROCK, default_model
+
+    try:
+        from app.database.session import SessionLocal
+        from app.services.llm_settings_service import resolve_runtime_llm
+
+        db = SessionLocal()
+        try:
+            runtime = resolve_runtime_llm(db)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        return default_model().display_name
+    if runtime.get("provider") != BEDROCK:
+        return str(runtime["model"])
+    return default_model().display_name
+
+
 def _llm_layout_rows(
     subject: str,
     text: str,
@@ -604,12 +624,11 @@ def _llm_layout_rows(
 )
     try:
         from app.llm.bedrock_client import complete
-        from app.llm.model_registry import default_model
 
         completion = complete(
             system=system,
             user=json.dumps(payload),
-            model_id=default_model().display_name,
+            model_id=_layout_model_id(),
             timeout=8,
             reason="email body layout",
         )

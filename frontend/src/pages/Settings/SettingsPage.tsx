@@ -17,6 +17,15 @@ const inputStyle: CSSProperties = {
   background: 'white',
 };
 
+type LlmProviderInfo = {
+  id: string;
+  label: string;
+  models: string[];
+  configured: boolean;
+  credential_env: string | null;
+  credential_source: string;
+};
+
 type LlmSettings = {
   provider: string;
   enabled: boolean;
@@ -25,7 +34,14 @@ type LlmSettings = {
   api_key_masked: string;
   available_providers: string[];
   available_models: string[];
+  providers?: LlmProviderInfo[];
   timeout_seconds: number;
+};
+
+const PROVIDER_LABELS: Record<string, string> = {
+  bedrock: 'AWS Bedrock',
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
 };
 
 type UsagePayload = {
@@ -128,6 +144,17 @@ export function SettingsPage() {
   };
 
   const totals = usage?.totals;
+  const providerInfo = settings?.providers?.find(p => p.id === provider);
+  const providerModels =
+    providerInfo?.models ?? (provider === settings?.provider ? settings?.available_models ?? [] : []);
+
+  const onProviderChange = (next: string) => {
+    setProvider(next);
+    const models = settings?.providers?.find(p => p.id === next)?.models ?? [];
+    const keep = next === settings?.provider ? settings?.model : undefined;
+    setModel(keep && models.includes(keep) ? keep : models[0] ?? '');
+    setHealthModel(keep && models.includes(keep) ? keep : models[0] ?? '');
+  };
 
   return (
     <div style={{ padding: '24px 28px', maxWidth: 960 }}>
@@ -187,12 +214,12 @@ export function SettingsPage() {
               <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#374151' }}>Provider</span>
               <select
                 value={provider}
-                onChange={e => setProvider(e.target.value)}
+                onChange={e => onProviderChange(e.target.value)}
                 style={inputStyle}
               >
                 {(settings?.available_providers || ['bedrock']).map(p => (
                   <option key={p} value={p}>
-                    {p === 'bedrock' ? 'AWS Bedrock' : p}
+                    {settings?.providers?.find(item => item.id === p)?.label ?? PROVIDER_LABELS[p] ?? p}
                   </option>
                 ))}
               </select>
@@ -201,7 +228,7 @@ export function SettingsPage() {
             <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#374151' }}>Model</span>
               <select value={model} onChange={e => setModel(e.target.value)} style={inputStyle}>
-                {(settings?.available_models || []).map(name => (
+                {providerModels.map(name => (
                   <option key={name} value={name}>
                     {name}
                   </option>
@@ -229,19 +256,26 @@ export function SettingsPage() {
             </label>
 
             <div style={{ fontSize: '0.8125rem', color: '#64748B' }}>
-              API key:{' '}
-              {settings?.provider === 'bedrock' ? (
+              Credentials:{' '}
+              {provider === 'bedrock' ? (
                 <span style={{ color: '#059669', fontWeight: 600 }}>
                   IAM role on the host (no API key)
                 </span>
-              ) : settings?.api_key_configured ? (
+              ) : providerInfo?.configured ? (
                 <span style={{ color: '#059669', fontWeight: 600 }}>
-                  configured ({settings.api_key_masked})
+                  configured on the backend via {providerInfo.credential_env}
                 </span>
               ) : (
                 <span style={{ color: '#DC2626', fontWeight: 600 }}>
-                  not configured
+                  not configured — set {providerInfo?.credential_env ?? 'the API key'} in the backend .env
+                  file and restart the backend
                 </span>
+              )}
+              {provider !== 'bedrock' && (
+                <div style={{ marginTop: 4, fontSize: '0.75rem', color: '#94A3B8' }}>
+                  API keys are read from backend environment variables only. They are never shown here or
+                  stored in the database.
+                </div>
               )}
             </div>
 
@@ -358,7 +392,7 @@ export function SettingsPage() {
         }}
       >
         <h2 style={{ margin: '0 0 14px', fontSize: '1rem', fontWeight: 700, color: '#0F172A' }}>
-          Bedrock Health Check
+          LLM Health Check
         </h2>
         <form
           onSubmit={async event => {
@@ -390,7 +424,7 @@ export function SettingsPage() {
           <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#374151' }}>Active Model</span>
             <select value={healthModel} onChange={event => setHealthModel(event.target.value)} style={inputStyle}>
-              {(settings?.available_models || ['MiniMax M2', 'GLM 4.7', 'GLM 4.7 Flash']).map(name => (
+              {(providerModels.length ? providerModels : ['MiniMax M2', 'GLM 4.7', 'GLM 4.7 Flash']).map(name => (
                 <option key={name} value={name}>
                   {name}
                 </option>
@@ -427,7 +461,7 @@ export function SettingsPage() {
               <div>Reply: {healthResult.reply}</div>
               <div>Latency: {healthResult.latency_ms} ms</div>
               <div>Model: {healthResult.model}</div>
-              <div>Region: {healthResult.region || '—'}</div>
+              <div>Region / provider: {healthResult.region || '—'}</div>
             </div>
           )}
         </form>

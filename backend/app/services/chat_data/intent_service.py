@@ -88,8 +88,12 @@ _CLEAR_FILTER_RE = re.compile(r"\ball\s+(distributors|segments|products|customer
 _LIMIT_RE = re.compile(r"\b(?:top|bottom|first|best|largest|highest|lowest)\s+(\d{1,3})\b|\b(\d{1,3})\s+(?:customers|products|distributors|segments|months|quarters)\b", re.I)
 _WORD_NUMBERS = {"three": 3, "five": 5, "ten": 10, "twenty": 20, "fifteen": 15, "seven": 7}
 _WORD_LIMIT_RE = re.compile(r"\btop\s+(" + "|".join(_WORD_NUMBERS) + r")\b", re.I)
+# "customer for A.B Brothers" names a distributor, not a customer: the name may not start
+# with a preposition, and only trailing punctuation ends it (initials like "A.B" stay whole).
 _CUSTOMER_MENTION_RE = re.compile(
-    r"\bcustomer\s+[\"“']?([A-Za-z0-9&.,()'\- ]{3,80}?)[\"”']?(?=\s+(?:in|for|during|from|of|by|with|across|between)\b|[?.!]|$)",
+    r"\bcustomer\s+(?!(?:in|for|during|from|of|by|with|across|between|under|at|on|the)\b)"
+    r"[\"“']?([A-Za-z0-9&.,()'\- ]{3,80}?)[\"”']?"
+    r"(?=\s+(?:in|for|during|from|of|by|with|across|between)\b|[?.!]*\s*$)",
     re.I,
 )
 _QUOTED_RE = re.compile(r"[\"“]([^\"”]{2,80})[\"”]")

@@ -12,7 +12,7 @@ from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, 
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.llm.model_registry import display_name_for, resolve_model_id
+from app.llm.model_registry import BEDROCK, display_name_for, model_provider, resolve_model_id
 
 logger = get_logger(__name__)
 
@@ -108,6 +108,18 @@ def complete(
         or "ap-south-1"
     )
     resolved_model = resolve_model_id(model_id or settings.default_model)
+    provider = model_provider(resolved_model)
+    if provider != BEDROCK:
+        from app.llm.provider_clients import complete_api
+
+        return complete_api(
+            provider,
+            system=system,
+            user=user,
+            model_id=resolved_model,
+            timeout=timeout,
+            reason=reason,
+        )
     if timeout is not None:
         limit = float(timeout)
     else:
@@ -283,6 +295,11 @@ def probe(model: str, message: str, *, timeout: float = 20.0) -> dict:
     from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError
 
     from app.llm.model_registry import is_known_model
+
+    if is_known_model(model) and model_provider(model) != BEDROCK:
+        from app.llm.provider_clients import probe_api
+
+        return probe_api(model, message, timeout=timeout)
 
     settings = get_settings()
     region = (
