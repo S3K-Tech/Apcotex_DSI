@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from sqlalchemy import func, or_
 
@@ -14,6 +14,7 @@ from app.utils.period_calendar import (
     calendar_year_for_fy_month,
     fy_short_display,
     month_label,
+    months_for_fy_quarter,
     parse_month_label,
 )
 
@@ -58,6 +59,36 @@ def actual_month_of_row(
             month, year = parsed
             return year, month
     return None
+
+
+def period_statement(period: Optional[PeriodRef], coverage: Sequence[int] = ()) -> str:
+    """One explicit sentence naming the period and its calendar range.
+
+    ``coverage`` lists the financial years with data (used for all-periods answers).
+    """
+    if period is None:
+        years = sorted(set(coverage))
+        if not years:
+            return "Period: All available periods."
+        if len(years) == 1:
+            return f"Period: All available periods (data covers {fy_short_display(years[0])})."
+        return (
+            "Period: All available periods "
+            f"(data covers {fy_short_display(years[0])} to {fy_short_display(years[-1])})."
+        )
+    if period.month is not None:
+        year = calendar_year_for_fy_month(period.fy_start, period.month)
+        return f"Period: {month_label(period.month, year)} ({fy_short_display(period.fy_start)})."
+    if period.quarter is not None:
+        months = months_for_fy_quarter(period.fy_start, period.quarter)
+        return (
+            f"Period: Q{period.quarter} {fy_short_display(period.fy_start)} "
+            f"({months[0]} – {months[-1]})."
+        )
+    return (
+        f"Period: Full financial year {fy_short_display(period.fy_start)} "
+        f"(April {period.fy_start} – March {period.fy_start + 1})."
+    )
 
 
 def quarter_label(fy_start: int, quarter: int) -> str:

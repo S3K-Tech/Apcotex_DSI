@@ -50,6 +50,12 @@ class SalesRecord(Base, TimestampMixin, SoftDeleteMixin):
     unit: Mapped[str] = mapped_column(String(20), default="KG", server_default="KG", nullable=False)
     original_unit: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     row_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Product standardization (NULL on rows imported before the feature existed).
+    original_product_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    product_standardization_status: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )
+    product_mapping_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     report_id: Mapped[int] = mapped_column(
         ForeignKey("reports.id", ondelete="CASCADE"),

@@ -184,6 +184,7 @@ class ChatAnswer(BaseModel):
     clarification: Optional[ChatClarification] = None
     spec: Optional[QuerySpec] = None
     interpreted_by: Literal["llm", "rules", "none"] = "none"
+    refinements: List[str] = Field(default_factory=list)
 
 
 class ChatStatusResponse(BaseModel):

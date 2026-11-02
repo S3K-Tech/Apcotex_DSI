@@ -44,7 +44,7 @@ from app.services.chat_data.answer_builder import (
 from app.services.chat_data.entity_resolver import EntityResolver, Resolution
 from app.services.chat_data.intent_service import IntentService, Interpretation, RuleHints
 from app.services.chat_data.knowledge import KNOWLEDGE_DOCUMENTS
-from app.services.chat_data.periods import period_label
+from app.services.chat_data.periods import period_label, period_statement
 from app.services.chat_data.query_service import ChatQueryService, ResolvedFilters, UnitAudit
 from app.services.chat_data.retrieval_service import DOC_KNOWLEDGE, RetrievalService
 from app.services.chat_data.scope import RESTRICTED_SEGMENT_MESSAGE, ChatScope
@@ -70,6 +70,17 @@ _AUDIT_STATUS = {
     "restricted": AuditStatus.WARNING.value,
     "error": AuditStatus.FAILED.value,
 }
+
+
+def _quarter_refinements(intent: QueryIntent, spec: QuerySpec, period: Optional[PeriodRef]) -> List[str]:
+    """Optional follow-ups that narrow a full-year answer to one quarter (never required)."""
+    if period is None or period.quarter is not None or period.month is not None:
+        return []
+    if intent not in (QueryIntent.RANK, QueryIntent.BREAKDOWN, QueryIntent.AGGREGATE):
+        return []
+    if spec.dimension in (QueryDimension.QUARTER, QueryDimension.MONTH):
+        return []
+    return [f"Q{q} {fy_short(period.fy_start)}" for q in (1, 2, 3, 4)]
 
 
 def _bedrock_complete(**kwargs):
@@ -286,7 +297,8 @@ class ChatDataOrchestrator:
         if not spec.periods and not spec.all_periods:
             return self._clarify(
                 spec,
-                "Which financial year should I use? Financial years run April to March.",
+                "Which financial year should I use? Financial years run April to March. "
+                "The full year is used unless you name a quarter.",
                 AwaitingField.PERIOD,
                 self._fy_options(),
             )
@@ -301,12 +313,14 @@ class ChatDataOrchestrator:
         if field in _KIND_LABEL:
             setattr(cleared.filters, field.value, None)
         if resolution.status == "ambiguous":
-            return self._clarify(
-                cleared,
-                f"More than one {kind} matches “{resolution.mention}”. Which one do you mean?",
-                field,
-                resolution.options,
-            )
+            if len(resolution.options) == 1:
+                question = (
+                    f"I couldn't find an exact {kind} match for “{resolution.mention}”. "
+                    f"Did you mean {resolution.options[0]}?"
+                )
+            else:
+                question = f"More than one {kind} matches “{resolution.mention}”. Which one do you mean?"
+            return self._clarify(cleared, question, field, resolution.options)
         message = f"I couldn't find a {kind} matching “{resolution.mention}” in the data you can access."
         if field == AwaitingField.DISTRIBUTOR:
             message += f" If you meant a customer, ask about “customer {resolution.mention}”."
@@ -406,6 +420,9 @@ class ChatDataOrchestrator:
             if text:
                 message, source = text, "llm_verified"
 
+        coverage = self.qs.available_fiscal_years(rf) if None in periods else []
+        message += "\n" + "\n".join(period_statement(p, coverage) for p in periods)
+
         return ChatAnswer(
             status="answer",
             message=message,
@@ -418,6 +435,7 @@ class ChatDataOrchestrator:
             scope_note=self.scope.describe(),
             caveats=caveats,
             spec=self._resolved_spec(spec, rf),
+            refinements=_quarter_refinements(intent, spec, period),
         )
 
     @staticmethod

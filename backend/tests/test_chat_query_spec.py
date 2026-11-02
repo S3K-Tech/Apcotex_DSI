@@ -145,6 +145,68 @@ def test_customer_for_distributor_with_initials_is_not_a_customer_filter():
     assert spec.periods == [PeriodRef(fy_start=2026)]
 
 
+_DISTRIBUTORS = ["GOEL MINERALS & CHEMICALS", "SOUTH INDIA RUBBER", "BAJAJ CHEMICALS", "BAJAJ RUBBER COMPANY PVT. LTD."]
+
+
+@pytest.mark.parametrize(
+    "question,distributor",
+    [
+        ("Goel minerals top 5 customers", "Goel minerals"),
+        ("top customers of goel minerals in FY 2026-27", "goel minerals"),
+        ("Goel Minerals & Chemicals top customers", "GOEL MINERALS & CHEMICALS"),
+        ("Bajaj top customers", "Bajaj"),
+        ("Xyz Traders top 5 customers", "Xyz Traders"),
+        ("Show me the top 5 customers in FY 2026-27", None),
+        ("Who are our top customers", None),
+        ("FY 2026-27 top 10 customers", None),
+        ("Paper top customers in FY 2026-27", None),
+    ],
+)
+def test_distributor_mentions(question, distributor):
+    assert RuleParser(RuleHints(distributor_names=_DISTRIBUTORS)).filters(question).distributor == distributor
+
+
+def test_distributor_words_are_not_read_as_segment():
+    f = RuleParser(RuleHints(distributor_names=_DISTRIBUTORS)).filters("South India Rubber top customers")
+    assert f.distributor == "SOUTH INDIA RUBBER" and f.segment is None
+    partial = RuleParser(RuleHints(distributor_names=_DISTRIBUTORS)).filters("south india top customers")
+    assert partial.distributor == "south india" and partial.segment is None
+
+
+def test_customer_mention_is_not_also_a_distributor():
+    f = RuleParser(RuleHints(distributor_names=_DISTRIBUTORS)).filters(
+        'Total quantity for customer "Goel Minerals Pvt.Ltd." in FY 2026-27'
+    )
+    assert f.customer == "Goel Minerals Pvt.Ltd" and f.distributor is None
+
+
+def test_bare_quarter_follow_up_binds_to_previous_year():
+    p = RuleParser(RuleHints(distributor_names=_DISTRIBUTORS))
+    first = p.parse("Goel minerals top 5 customers in FY 2026-27")
+    assert first.periods == [PeriodRef(fy_start=2026)] and first.awaiting is None
+    follow = p.parse("Q3", first)
+    assert follow.periods == [PeriodRef(fy_start=2026, quarter=3)]
+    assert follow.filters.distributor == "Goel minerals" and follow.awaiting is None
+    ranked = p.parse("Top 3 customers in Q4", first)
+    assert ranked.periods == [PeriodRef(fy_start=2026, quarter=4)] and ranked.limit == 3
+
+
+def test_period_statements():
+    from app.services.chat_data.periods import period_statement
+
+    assert period_statement(PeriodRef(fy_start=2026)) == (
+        "Period: Full financial year FY 2026–27 (April 2026 – March 2027)."
+    )
+    assert period_statement(PeriodRef(fy_start=2026, quarter=4)) == (
+        "Period: Q4 FY 2026–27 (January 2027 – March 2027)."
+    )
+    assert period_statement(PeriodRef(fy_start=2025, month=3)) == "Period: March 2026 (FY 2025–26)."
+    assert period_statement(None, [2026, 2025]) == (
+        "Period: All available periods (data covers FY 2025–26 to FY 2026–27)."
+    )
+    assert period_statement(None) == "Period: All available periods."
+
+
 @pytest.mark.parametrize(
     "question,customer",
     [

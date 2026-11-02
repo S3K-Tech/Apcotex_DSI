@@ -170,6 +170,7 @@ class EntityResolver:
         matches = [(i, n) for i, n, k in keyed if k == key]
         if not matches and len(key) >= 4:
             matches = [(i, n) for i, n, k in keyed if key in k or (len(k) >= 4 and k in key)]
+        approximate = not matches
         if not matches and self.retrieval and self.embedding_model and universe:
             allowed = [i for i, _ in universe]
             hits = self.retrieval.search(
@@ -188,10 +189,11 @@ class EntityResolver:
                 (i, n) for i, n in universe if fuzz.token_set_ratio(folded, n.casefold()) >= _FUZZY_DISTRIBUTOR
             ]
         matches = _dedupe(matches)
-        if len(matches) == 1:
+        # A semantic or fuzzy guess could be a different distributor: the user confirms it.
+        if len(matches) == 1 and not approximate:
             i, n = matches[0]
             return Resolution("ok", ResolvedFilters(distributor_id=i, distributor_name=n))
-        if len(matches) > 1:
+        if matches:
             names = sorted({n for _, n in matches}, key=str.casefold)[:_MAX_OPTIONS]
             return Resolution("ambiguous", target=AwaitingField.DISTRIBUTOR, mention=mention, options=names)
         return Resolution("not_found", target=AwaitingField.DISTRIBUTOR, mention=mention)

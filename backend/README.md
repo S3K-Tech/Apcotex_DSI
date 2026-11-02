@@ -116,6 +116,51 @@ Example process:
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
+## FG Master product standardization
+
+The FG Master lives only in each environment's PostgreSQL database. It is never
+seeded by a migration, packaged in the Docker image, or copied between environments.
+
+### Deploy (each environment)
+
+1. Back up the database (`pg_dump`).
+2. Deploy the code, then run `alembic upgrade head` (revision `b8c9d0e1f2a3`). This migration:
+   - creates `fg_master_versions`, `fg_master_products`, `product_mapping_history`,
+     `product_standardization_snapshots` (empty);
+   - adds approval/scope columns to `product_alias_mappings` and marks the existing rows of
+     that table `APPROVED` with a scope derived from `distributor_id`;
+   - adds three nullable columns to `sales_records`
+     (`original_product_name`, `product_standardization_status`, `product_mapping_id`).
+     No sales row is updated; NULL means "imported before standardization".
+3. Restart the API. Until a master is published, the workbench shows
+   "FG Master is not configured" and imports keep the original product names.
+
+### One-time master upload (each environment)
+
+1. Sign in as a Super Admin and open **Master Data**.
+2. Upload the FG Master workbook (`.xlsx` / `.xlsm`, max 10 MB). Only the
+   `Material Description` column is read; Material, Plant and Valuation Type are ignored.
+   The upload fails if that column is missing or appears more than once.
+3. Review the valid / duplicate / invalid counts and the replace preview
+   (new, removed, unchanged descriptions and mappings that point to removed descriptions).
+4. Click **Publish** and confirm. The previous active version becomes `superseded`.
+
+Repeat steps 1–4 in local, UAT and production separately.
+
+### Behaviour
+
+- Matching order: approved distributor mapping → approved global mapping → exact FG Master
+  match → high / medium similarity (needs review) → unmapped. Only the first three are
+  applied automatically on import.
+- Approvals in the Emails workbench (eye icon next to Accuracy) create a distributor
+  mapping and, when none exists, a global mapping. An existing global mapping is never
+  overwritten; a conflicting correction stays distributor-specific.
+- Standardization applies to **new imports only**. Historical sales records are never
+  reprocessed or updated. Approve products in the workbench before importing an email so the
+  import uses the standardized names.
+- Duplicate / incremental detection compares the distributor's original product text, so a
+  resent file still matches rows imported before standardization.
+
 ## License
 
 Proprietary — Apcotex Industries / internal use.

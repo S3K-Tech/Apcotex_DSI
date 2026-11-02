@@ -30,6 +30,9 @@ class SalesRecordMapper:
             unit=row.unit or "MT",
             original_unit=(getattr(row, "original_unit", None) or None) or None,
             row_hash=row.row_hash,
+            original_product_name=getattr(row, "original_product_name", None),
+            product_standardization_status=getattr(row, "product_standardization_status", None),
+            product_mapping_id=getattr(row, "product_mapping_id", None),
             report_id=report_id,
             distributor_id=distributor_id,
         )

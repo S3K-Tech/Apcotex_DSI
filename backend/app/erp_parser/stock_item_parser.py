@@ -23,6 +23,7 @@ from app.utils.period_calendar import (
     quarter_of_month,
 )
 from app.utils.quantity import format_quantity, parse_quantity
+from app.utils.summary_labels import TALLY_VALUATION_FOOTER_PATTERN
 
 logger = get_logger(__name__)
 
@@ -34,6 +35,7 @@ _TITLE_SKIP_RE = re.compile(
 )
 _SKIP_ROW_RE = re.compile(
     r"^(grand\s+|sub\s+)?totals?\b$"
+    rf"|{TALLY_VALUATION_FOOTER_PATTERN}"
     r"|^(opening|closing)(\s+balance|\s+stock)?$"
     r"|^(voucher\s*no\.?|vch\s*type|vch\s*no\.?)$",
     re.IGNORECASE,

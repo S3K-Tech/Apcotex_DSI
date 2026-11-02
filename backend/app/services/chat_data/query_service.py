@@ -39,6 +39,7 @@ from app.services.sales_insights_service import (
 )
 from app.utils.period_calendar import month_label
 from app.utils.quantity import _COUNT_UNITS, round_mt
+from app.utils.summary_labels import TALLY_VALUATION_FOOTER_PATTERN
 
 
 @dataclass
@@ -125,6 +126,7 @@ class ChatQueryService:
             allowed_segments=self.scope.allowed_segments,
             allowed_companies=self.scope.allowed_companies,
         )
+        q = q.where(_not_report_footer())
         if apply_customer and rf.customer_key:
             q = q.where(_customer_identity_expr() == rf.customer_key)
         return q
@@ -306,6 +308,7 @@ class ChatQueryService:
                 SalesRecord.distributor_id.is_(None),
                 SalesRecord.is_deleted.is_(False),
                 Report.is_deleted.is_(False),
+                _not_report_footer(),
             )
         )
         if self.scope.allowed_segments is not None:
@@ -351,6 +354,13 @@ class ChatQueryService:
             if ym:
                 years.add(ym[0] if ym[1] >= 4 else ym[0] - 1)
         return sorted(years, reverse=True)
+
+
+def _not_report_footer():
+    """Excludes stored ERP footer rows (e.g. Tally valuation totals) imported as customers."""
+    return not_(
+        func.coalesce(SalesRecord.customer_name, "").op("~*")(TALLY_VALUATION_FOOTER_PATTERN)
+    )
 
 
 def _month_name(year: int, month: int) -> str:

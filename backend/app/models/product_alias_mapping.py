@@ -1,8 +1,9 @@
 """Distributor product name → normalized product name (mapping history)."""
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampMixin
@@ -37,6 +38,7 @@ class ProductAliasMapping(Base, TimestampMixin):
         ),
         Index("ix_product_alias_mappings_distributor_id", "distributor_id"),
         Index("ix_product_alias_mappings_normalized", "normalized_product_name"),
+        Index("ix_product_alias_mappings_original_key", "normalized_original_name"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -58,6 +60,24 @@ class ProductAliasMapping(Base, TimestampMixin):
         default=True,
         server_default="true",
         nullable=False,
+    )
+    # Matching key for original_product_name (product_master.normalize.compact_key).
+    normalized_original_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    scope: Mapped[str] = mapped_column(
+        String(20), default="GLOBAL", server_default="GLOBAL", nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="APPROVED", server_default="APPROVED", nullable=False
+    )
+    approved_by: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    master_version_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_custom_value: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
     )
 
     distributor: Mapped[Optional["Distributor"]] = relationship("Distributor")

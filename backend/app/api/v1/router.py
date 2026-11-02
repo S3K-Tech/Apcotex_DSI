@@ -17,6 +17,7 @@ from app.api.v1.endpoints import (
     normalization,
     outlook,
     personas,
+    product_standardization,
     reports,
     settings,
     users,
@@ -43,3 +44,4 @@ api_router.include_router(analytics.router)
 api_router.include_router(chat_data.router)
 api_router.include_router(settings.router)
 api_router.include_router(normalization.router)
+api_router.include_router(product_standardization.router)

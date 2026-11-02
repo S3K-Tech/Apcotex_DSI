@@ -188,6 +188,13 @@ class ValidationMixin:
                     row_hash=build_sales_row_hash(
                         company, customer, seg, product, qty_val, period, source_month
                     ),
+                    original_product_name=(
+                        str(raw.get("original_product_name") or "").strip()[:255] or None
+                    ),
+                    product_standardization_status=(
+                        str(raw.get("product_standardization_status") or "").strip() or None
+                    ),
+                    product_mapping_id=raw.get("product_mapping_id"),
                 )
             )
         return by_period

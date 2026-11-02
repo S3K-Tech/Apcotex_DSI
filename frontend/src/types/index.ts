@@ -609,6 +609,7 @@ export interface ChatDataAnswer {
   clarification?: { question: string; options: string[] } | null;
   spec?: ChatQuerySpec | null;
   interpreted_by: 'llm' | 'rules' | 'none';
+  refinements?: string[];
 }
 
 export interface ChatDataAvailability {

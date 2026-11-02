@@ -136,6 +136,12 @@ def _identity(
     )
 
 
+def _identity_product(row: Mapping[str, Any]) -> str:
+    # Distributor's own product text. Standardized rows keep it in
+    # original_product_name; rows imported before standardization only have product.
+    return str(row.get("original_product_name") or row.get("product") or "")
+
+
 def load_existing(
     db: Session,
     distributor_id: int,
@@ -167,17 +173,19 @@ def load_existing(
             SalesRecord.period,
             SalesRecord.location,
             SalesRecord.segment,
+            SalesRecord.original_product_name,
         )
         .join(Report, Report.id == SalesRecord.report_id)
         .where(*filters)
     ).all()
     loaded: List[Dict[str, Any]] = []
-    for record_id, customer, product, quantity, source_month, period, loc, seg in rows:
+    for record_id, customer, product, quantity, source_month, period, loc, seg, original in rows:
         loaded.append(
             {
                 "id": int(record_id),
                 "customer_name": customer or "",
                 "product": product or "",
+                "original_product_name": original or "",
                 "quantity": quantity,
                 "source_month": source_month or "",
                 "period": period or "",
@@ -203,7 +211,7 @@ def analyse_rows(
         period = str(row.get("period") or "")
         key = _identity(
             str(row.get("customer_name") or ""),
-            str(row.get("product") or ""),
+            _identity_product(row),
             _when_key(row, period),
             financial_year_of(period),
             str(row.get("location") or scope_location),
@@ -227,7 +235,7 @@ def analyse_rows(
         )
         key = _identity(
             customer,
-            product,
+            _identity_product(row),
             when,
             financial_year_of(period),
             row_location,

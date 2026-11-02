@@ -247,6 +247,80 @@ def _name_mention(text: str, names: Sequence[str], normalizer: Callable[[str], s
     return best
 
 
+def _name_tokens(text: str) -> List[Tuple[str, int, int]]:
+    return [
+        ("AND" if m.group(0) == "&" else m.group(0).upper(), m.start(), m.end())
+        for m in re.finditer(r"[A-Za-z0-9]+|&", text)
+    ]
+
+
+def _distributor_prefix_mention(text: str, names: Sequence[str]) -> Optional[str]:
+    """The question's words that spell the leading words of an authorized distributor name.
+
+    "Goel minerals" → "GOEL MINERALS & CHEMICALS". At least two words and five letters
+    must match. The user's own words are returned so the resolver can still ask when
+    several distributors share them.
+    """
+    words = _name_tokens(text)
+    best: Optional[Tuple[int, int]] = None
+    for name in names:
+        name_words = [w for w, _, _ in _name_tokens(name)]
+        if len(name_words) < 2:
+            continue
+        for i in range(len(words)):
+            n = 0
+            while n < len(name_words) and i + n < len(words) and words[i + n][0] == name_words[n]:
+                n += 1
+            if n < 2 or sum(len(w) for w in name_words[:n]) < 5:
+                continue
+            if best is None or n > best[1] - best[0]:
+                best = (i, i + n)
+    if best is None:
+        return None
+    return text[words[best[0]][1] : words[best[1] - 1][2]]
+
+
+_LEADING_ENTITY_RE = re.compile(
+    r"^\s*(?P<lead>.+?)\s+(?:top|bottom|highest|lowest|largest|biggest|best|leading)\b", re.I
+)
+_LEADING_FILLER = {
+    "show", "me", "what", "whats", "what's", "are", "is", "were", "was", "who", "which", "list",
+    "give", "tell", "please", "pls", "plz", "our", "my", "get", "find", "display", "i", "want",
+    "need", "to", "see", "know", "can", "you", "could", "would", "a", "an", "of", "for", "in",
+    "and", "hi", "hello", "sales", "quantity", "total", "volume", "fetch", "provide", "current",
+    "overall", "us", "let", "do", "we", "have", "with", "by", "from", "at", "on", "about",
+    "customer", "customers", "product", "products", "distributor", "distributors", "segment",
+    "segments", "buyers", "clients", "rank", "ranking", "ranked", "monthly", "quarterly", "yearly",
+    "annual", "this", "last", "year", "month", "full", "only", "just", "now", "then", "also",
+}
+
+
+def _leading_entity(text: str, taken: Set[Optional[str]], product_words: Set[str]) -> Optional[str]:
+    """An unrecognised name before the ranking word ("Xyz Traders top 5 customers").
+
+    Kept as a distributor mention so it is resolved (or reported as not found)
+    instead of being dropped, which would silently rank across every distributor.
+    """
+    m = _LEADING_ENTITY_RE.match(text)
+    if not m:
+        return None
+    lead = m.group("lead")
+    for name in taken:
+        if name:
+            lead = re.sub(re.escape(name), " ", lead, flags=re.I)
+    segment_words = set(SEGMENT_ALIASES) | {s.lower() for s in BUSINESS_SEGMENTS}
+    kept: List[str] = []
+    for word in re.findall(r"[A-Za-z][\w&.'\-]*", lead):
+        folded = word.lower().strip(".'")
+        if folded in _LEADING_FILLER or folded in _NOT_ENTITY_WORDS or re.fullmatch(r"(fy|q)\d*", folded):
+            continue
+        if folded in segment_words or folded.upper() in product_words:
+            return None
+        kept.append(word)
+    name = " ".join(kept).strip(" .,&")
+    return name if len(name) >= 3 else None
+
+
 def _compact(value: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", normalize_distributor_name(value))
 
@@ -263,6 +337,15 @@ def _limit(text: str) -> Optional[int]:
     if w:
         return _WORD_NUMBERS[w.group(1).lower()]
     return None
+
+
+def _quarters_in_previous_fy(per: _Periods, previous: QuerySpec) -> List[PeriodRef]:
+    """A bare quarter after a one-year answer means that quarter of the same FY ("Q2" → Q2 FY 2026-27)."""
+    years = {p.fy_start for p in previous.periods}
+    if not per.quarters_without_fy or per.periods or len(years) != 1:
+        return []
+    fy = next(iter(years))
+    return [PeriodRef(fy_start=fy, quarter=q) for q in per.quarters_without_fy[:2]]
 
 
 class RuleParser:
@@ -288,6 +371,9 @@ class RuleParser:
             q = _QUOTED_RE.search(text)
             if q and q.group(1).strip() not in {distributor, product}:
                 customer = q.group(1).strip()
+        if distributor is None:
+            without_customer = re.sub(re.escape(customer), " ", text, flags=re.I) if customer else text
+            distributor = _distributor_prefix_mention(without_customer, self.hints.distributor_names)
         # Segment words inside an entity name ("Secret Glove Co", "NBR LATEX") are not segments.
         segment_text = _QUOTED_RE.sub(" ", text)
         for name in (customer, distributor, product):
@@ -296,6 +382,9 @@ class RuleParser:
         segment = _segment_mention(segment_text)
         if distributor is None:
             distributor = self._unknown_named_entity(text, {segment, product, customer})
+        if distributor is None and not customer:
+            product_words = {w for p in self.hints.product_names for w, _, _ in _name_tokens(p)}
+            distributor = _leading_entity(text, {segment, product, customer}, product_words)
         return QueryFilters(segment=segment, distributor=distributor, product=product, customer=customer)
 
     @staticmethod
@@ -419,9 +508,13 @@ class RuleParser:
                 data["filters"][key] = value
         for m in _CLEAR_FILTER_RE.finditer(text):
             data["filters"][m.group(1).lower().rstrip("s")] = None
+        bound = _quarters_in_previous_fy(per, previous)
         if not spec.periods and not spec.all_periods and not per.quarters_without_fy:
             data["periods"] = [p.model_dump() for p in previous.periods]
             data["all_periods"] = previous.all_periods
+        elif not spec.periods and bound:
+            data["periods"] = [p.model_dump() for p in bound]
+            data["all_periods"] = False
         return QuerySpec.model_validate(data)
 
     def _follow_up(self, text: str, previous: QuerySpec, per: _Periods, found: QueryFilters, limit: Optional[int]) -> QuerySpec:
@@ -433,8 +526,12 @@ class RuleParser:
                 data["filters"][key] = value
         for m in _CLEAR_FILTER_RE.finditer(text):
             data["filters"][m.group(1).lower().rstrip("s")] = None
+        bound = _quarters_in_previous_fy(per, previous)
         if per.periods:
             data["periods"] = [p.model_dump() for p in per.periods[:2]]
+            data["all_periods"] = False
+        elif bound:
+            data["periods"] = [p.model_dump() for p in bound]
             data["all_periods"] = False
         elif per.all_periods:
             data["periods"] = []

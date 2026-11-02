@@ -6,8 +6,12 @@ import {
   ArrowRight,
   Trash2,
   X,
+  Eye,
+  Info as InfoIcon,
 } from 'lucide-react';
 import { useNavigate } from 'react-router';
+import { ProductWorkbenchModal } from './ProductWorkbenchModal';
+import { StandardizedDataModal } from './StandardizedDataModal';
 import { BLUE, BORDER, RED, TEAL } from '../../constants/theme';
 import type { EmailRecord } from '../../types';
 import {
@@ -185,6 +189,10 @@ export function EmailsModule() {
 
   const [fiscalYearStart, setFiscalYearStart] = useState(2025);
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
+  const [standardization, setStandardization] = useState<{
+    email: EmailRecord;
+    mode: 'workbench' | 'data';
+  } | null>(null);
   const [consolidateOpen, setConsolidateOpen] = useState(false);
   const [consolidateBusy, setConsolidateBusy] = useState(false);
   const [consolidateError, setConsolidateError] = useState<string | null>(null);
@@ -932,6 +940,34 @@ export function EmailsModule() {
                             {acc.detail}
                           </span>
                         </div>
+                        {email.hasExcel !== false && (
+                          <div style={{ display: 'inline-flex', gap: 4, marginLeft: 6, verticalAlign: 'top' }}>
+                            <button
+                              type="button"
+                              title="Product Standardization Workbench"
+                              aria-label="Open Product Standardization Workbench"
+                              style={iconBtn}
+                              onClick={event => {
+                                event.stopPropagation();
+                                setStandardization({ email, mode: 'workbench' });
+                              }}
+                            >
+                              <Eye size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Extracted data with standardized products"
+                              aria-label="Open extracted data with standardized products"
+                              style={iconBtn}
+                              onClick={event => {
+                                event.stopPropagation();
+                                setStandardization({ email, mode: 'data' });
+                              }}
+                            >
+                              <InfoIcon size={15} />
+                            </button>
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: '12px 14px' }}>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap' }}>
@@ -1354,6 +1390,21 @@ export function EmailsModule() {
           </div>
         </div>
       )}
+
+      {standardization?.mode === 'workbench' && (
+        <ProductWorkbenchModal
+          emailId={standardization.email.id}
+          title={standardization.email.subject}
+          onClose={() => setStandardization(null)}
+        />
+      )}
+      {standardization?.mode === 'data' && (
+        <StandardizedDataModal
+          emailId={standardization.email.id}
+          title={standardization.email.subject}
+          onClose={() => setStandardization(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1383,6 +1434,19 @@ const th: CSSProperties = {
   fontSize: '0.6875rem',
   fontWeight: 700,
   color: '#6B7280',
+};
+
+const iconBtn: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 28,
+  height: 28,
+  border: `1px solid ${BORDER}`,
+  borderRadius: 6,
+  background: 'white',
+  color: BLUE,
+  cursor: 'pointer',
 };
 
 const td: CSSProperties = {

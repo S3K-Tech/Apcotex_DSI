@@ -685,6 +685,20 @@ class ImportMixin:
                 details={"skips": detail},
             )
 
+        from app.services.product_master.apply import apply_product_standardization
+
+        standardization = apply_product_standardization(
+            self.db, merged_rows, distributor_id=resolved_id
+        )
+        logger.info(
+            "Product standardization | email_id={} | auto={} | review={} | unmapped={} | master={}",
+            email_id,
+            standardization["auto_matched"],
+            standardization["needs_review"],
+            standardization["unmapped"],
+            standardization["master_configured"],
+        )
+
         try:
             saved = self._persist_preview_rows(
                 email=email,

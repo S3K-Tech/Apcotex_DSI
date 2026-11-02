@@ -12,6 +12,7 @@ import {
   BookMarked,
   Shuffle,
   MessageSquare,
+  Database,
 } from 'lucide-react';
 import APCOTEX_LOGO from '../../assets/images/apcotexindustrieslogo.png';
 import { BLUE, TEAL, RED, BORDER } from '../../constants/theme';
@@ -28,6 +29,7 @@ const mainNavItems = [
   { path: '/audit-trail',       label: 'Audit Trail',       icon: ScrollText, adminOnly: true },
   { path: '/user-management',   label: 'Persona Management',  icon: Users, adminOnly: true },
   { path: '/normalization',     label: 'Normalization',     icon: Shuffle, superAdminOnly: true },
+  { path: '/master-data',       label: 'Master Data',       icon: Database, superAdminOnly: true },
 ];
 
 const adminNavItems = [

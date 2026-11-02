@@ -128,10 +128,12 @@ function AnswerCard({
   answer,
   onOption,
   disabled,
+  latest,
 }: {
   answer: ChatDataAnswer;
   onOption: (text: string) => void;
   disabled: boolean;
+  latest: boolean;
 }) {
   const badge = STATUS_STYLE[answer.status];
   const showFacts = answer.status === 'answer' && answer.facts.length > 0;
@@ -217,6 +219,35 @@ function AnswerCard({
               style={{
                 padding: '6px 12px',
                 fontSize: '0.8125rem',
+                color: BLUE,
+                background: 'white',
+                border: `1px solid ${TEAL}`,
+                borderRadius: 8,
+                cursor: disabled ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {latest && answer.status === 'answer' && answer.refinements && answer.refinements.length > 0 && (
+        <div
+          style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}
+          role="group"
+          aria-label="Optional quarter filter"
+        >
+          <span style={{ fontSize: '0.75rem', color: TEXT_SECONDARY }}>Narrow to a quarter (optional):</span>
+          {answer.refinements.map(opt => (
+            <button
+              key={opt}
+              type="button"
+              disabled={disabled}
+              onClick={() => onOption(opt)}
+              style={{
+                padding: '4px 10px',
+                fontSize: '0.75rem',
                 color: BLUE,
                 background: 'white',
                 border: `1px solid ${TEAL}`,
@@ -480,7 +511,7 @@ export function ChatWithData() {
               </div>
             )}
 
-            {thread.map(item =>
+            {thread.map((item, index) =>
               item.role === 'user' ? (
                 <div key={item.id} style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <div
@@ -501,7 +532,12 @@ export function ChatWithData() {
                 </div>
               ) : (
                 <div key={item.id} style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                  <AnswerCard answer={item.answer} onOption={opt => void send(opt)} disabled={loading} />
+                  <AnswerCard
+                    answer={item.answer}
+                    onOption={opt => void send(opt)}
+                    disabled={loading}
+                    latest={index === thread.length - 1}
+                  />
                 </div>
               ),
             )}

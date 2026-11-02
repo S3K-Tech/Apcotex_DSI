@@ -335,3 +335,6 @@ class ParsedSalesRow(BaseModel):
     company: Optional[str] = None
     row_hash: str = ""
     errors: List[str] = Field(default_factory=list)
+    original_product_name: Optional[str] = None
+    product_standardization_status: Optional[str] = None
+    product_mapping_id: Optional[int] = None
