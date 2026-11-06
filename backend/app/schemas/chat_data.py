@@ -9,12 +9,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 MAX_RESULT_LIMIT = 50
 DEFAULT_RESULT_LIMIT = 10
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
 MAX_MENTION_CHARS = 200
 
 
 class QueryIntent(str, Enum):
     AGGREGATE = "aggregate"
     RANK = "rank"
+    LIST = "list"
     BREAKDOWN = "breakdown"
     COMPARE = "compare"
     TREND = "trend"
@@ -27,6 +30,8 @@ class QueryMetric(str, Enum):
     QUANTITY_MT = "quantity_mt"
     CUSTOMER_COUNT = "customer_count"
     PRODUCT_COUNT = "product_count"
+    # Distinct count of ``QuerySpec.dimension`` (distributors, customers, products, ...).
+    ENTITY_COUNT = "entity_count"
 
 
 class QueryDimension(str, Enum):
@@ -34,8 +39,11 @@ class QueryDimension(str, Enum):
     PRODUCT = "product"
     DISTRIBUTOR = "distributor"
     SEGMENT = "segment"
+    LOCATION = "location"
     QUARTER = "quarter"
     MONTH = "month"
+    # One row per distributor-segment pair seen in sales ("distributors with their segments").
+    DISTRIBUTOR_SEGMENT = "distributor_segment"
 
 
 class SortDirection(str, Enum):
@@ -53,6 +61,7 @@ class AwaitingField(str, Enum):
     CUSTOMER = "customer"
     PRODUCT = "product"
     SEGMENT = "segment"
+    LOCATION = "location"
 
 
 class PeriodRef(BaseModel):
@@ -80,8 +89,9 @@ class QueryFilters(BaseModel):
     distributor: Optional[str] = Field(default=None, max_length=MAX_MENTION_CHARS)
     customer: Optional[str] = Field(default=None, max_length=MAX_MENTION_CHARS)
     product: Optional[str] = Field(default=None, max_length=MAX_MENTION_CHARS)
+    location: Optional[str] = Field(default=None, max_length=MAX_MENTION_CHARS)
 
-    @field_validator("segment", "distributor", "customer", "product", mode="before")
+    @field_validator("segment", "distributor", "customer", "product", "location", mode="before")
     @classmethod
     def _clean(cls, value: Any) -> Optional[str]:
         if value is None:
@@ -100,15 +110,21 @@ class QuerySpec(BaseModel):
     intent: QueryIntent
     metric: QueryMetric = QueryMetric.QUANTITY_MT
     dimension: Optional[QueryDimension] = None
+    # ENTITY_COUNT split by another dimension ("how many distributors in each segment").
+    per: Optional[QueryDimension] = None
     filters: QueryFilters = Field(default_factory=QueryFilters)
     periods: List[PeriodRef] = Field(default_factory=list, max_length=2)
     all_periods: bool = False
     direction: SortDirection = SortDirection.DESC
     limit: int = DEFAULT_RESULT_LIMIT
+    page: int = 1
+    page_size: int = DEFAULT_PAGE_SIZE
     clarification_question: Optional[str] = Field(default=None, max_length=300)
     unsupported_reason: Optional[str] = Field(default=None, max_length=300)
     awaiting: Optional[AwaitingField] = None
     pending_quarters: List[int] = Field(default_factory=list, max_length=2)
+    # The single "Did you mean …?" suggestion, so a plain "yes" confirms it.
+    suggestion: Optional[str] = Field(default=None, max_length=MAX_MENTION_CHARS)
 
     @field_validator("pending_quarters")
     @classmethod
@@ -126,6 +142,23 @@ class QuerySpec(BaseModel):
             return DEFAULT_RESULT_LIMIT
         return max(1, min(MAX_RESULT_LIMIT, number))
 
+    @field_validator("page", mode="before")
+    @classmethod
+    def _clamp_page(cls, value: Any) -> int:
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 1
+
+    @field_validator("page_size", mode="before")
+    @classmethod
+    def _clamp_page_size(cls, value: Any) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_PAGE_SIZE
+        return max(1, min(MAX_PAGE_SIZE, number))
+
 
 class ChatAskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -141,6 +174,16 @@ class ChatAskRequest(BaseModel):
         if not text:
             raise ValueError("Question is empty")
         return text
+
+
+class ChatPageRequest(BaseModel):
+    """Another page of a previous "list all" answer. The spec is re-resolved and re-authorized."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec: QuerySpec
+    page: int = Field(..., ge=1, le=100_000)
+    page_size: Optional[int] = Field(default=None, ge=1, le=MAX_PAGE_SIZE)
 
 
 ChatStatus = Literal["answer", "clarification", "restricted", "no_data", "unsupported", "error"]
@@ -165,6 +208,16 @@ class ChatTable(BaseModel):
     rows: List[Dict[str, Any]]
 
 
+class ChatPagination(BaseModel):
+    total_records: int
+    current_page: int
+    page_size: int
+    total_pages: int
+    first_record: int
+    last_record: int
+    entity: str
+
+
 class ChatClarification(BaseModel):
     question: str
     options: List[str] = Field(default_factory=list)
@@ -176,6 +229,7 @@ class ChatAnswer(BaseModel):
     narrative_source: Literal["template", "llm_verified"] = "template"
     facts: List[ChatFact] = Field(default_factory=list)
     table: Optional[ChatTable] = None
+    pagination: Optional[ChatPagination] = None
     unit: Optional[str] = None
     periods: List[str] = Field(default_factory=list)
     filters: Dict[str, str] = Field(default_factory=dict)

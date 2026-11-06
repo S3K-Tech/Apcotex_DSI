@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 from app.core.logging import get_logger
 from app.schemas.chat_data import (
     ChatFact,
+    ChatPagination,
     ChatTable,
     ChatTableColumn,
     QueryDimension,
@@ -44,8 +45,12 @@ _DIM_SINGULAR = {
     QueryDimension.SEGMENT: "segment",
     QueryDimension.QUARTER: "quarter",
     QueryDimension.MONTH: "month",
+    QueryDimension.LOCATION: "location",
+    QueryDimension.DISTRIBUTOR_SEGMENT: "distributor-segment row",
 }
+_NAME_COLUMN = {QueryDimension.DISTRIBUTOR_SEGMENT: "Distributor"}
 _DIM_PLURAL = {k: v + "s" for k, v in _DIM_SINGULAR.items()}
+_COUNT_NAMES_SHOWN = 5
 
 
 @dataclass
@@ -97,6 +102,8 @@ def filter_phrase(rf: ResolvedFilters) -> str:
         parts.append(f"of {rf.product}")
     if rf.segment:
         parts.append(f"in the {rf.segment} segment")
+    if rf.location:
+        parts.append(f"at {rf.location}")
     return (" " + " ".join(parts)) if parts else ""
 
 
@@ -128,20 +135,137 @@ def build_aggregate(spec: QuerySpec, rf: ResolvedFilters, period: str, total: To
     return BuiltAnswer(message=message, facts=facts, periods=[period], empty=total.row_count == 0)
 
 
-def _rank_table(dimension: QueryDimension, rows: Sequence[GroupRow], total: float) -> ChatTable:
+def build_count(
+    spec: QuerySpec,
+    rf: ResolvedFilters,
+    period: str,
+    total: TotalResult,
+    dimension: QueryDimension,
+    count: int,
+    groups: Sequence[GroupRow],
+) -> BuiltAnswer:
+    """A distinct-entity count: facts only, never a table."""
+    fp = filter_phrase(rf)
+    word = _DIM_SINGULAR[dimension] if count == 1 else _DIM_PLURAL[dimension]
+    message = f"{count} distinct {word}{fp} in {period}."
+    names: List[str] = []
+    if 0 < count <= _COUNT_NAMES_SHOWN and len(groups) == count:
+        names = [g.label for g in groups]
+        message = f"{count} distinct {word}{fp} in {period}: {', '.join(names)}."
+    facts = [
+        _fact("entity_count", f"Distinct {_DIM_PLURAL[dimension]}", count),
+        _fact("quantity_mt", "Total quantity", total.quantity_mt, UNIT),
+    ]
+    return BuiltAnswer(message=message, facts=facts, periods=[period], names=names, empty=total.row_count == 0)
+
+
+def build_count_per_segment(rf: ResolvedFilters, period: str, rows: Sequence[GroupRow], distinct: int) -> BuiltAnswer:
+    """Distinct distributors in each segment (a distributor in two segments counts in both)."""
+    if not rows:
+        return BuiltAnswer(message="", periods=[period], empty=True)
+    fp = filter_phrase(rf)
+    parts = ", ".join(f"{r.label} {r.count}" for r in rows[:_COUNT_NAMES_SHOWN])
+    message = f"{distinct} distinct distributors{fp} in {period} across {len(rows)} segments ({parts}"
+    message += ", …)." if len(rows) > _COUNT_NAMES_SHOWN else ")."
+    table = ChatTable(
+        columns=[
+            ChatTableColumn(key="rank", label="#", numeric=True),
+            ChatTableColumn(key="name", label="Segment"),
+            ChatTableColumn(key="count", label="Distributors", numeric=True),
+            ChatTableColumn(key="quantity_mt", label="Quantity (MT)", numeric=True),
+        ],
+        rows=[
+            {"rank": i, "name": r.label, "count": r.count, "quantity_mt": r.quantity_mt}
+            for i, r in enumerate(rows, start=1)
+        ],
+    )
+    facts = [
+        _fact("entity_count", "Distinct distributors", distinct),
+        _fact("segment_count", "Segments", len(rows)),
+    ]
+    return BuiltAnswer(message=message, facts=facts, table=table, periods=[period], names=[r.label for r in rows])
+
+
+def build_list(
+    spec: QuerySpec,
+    rf: ResolvedFilters,
+    period: str,
+    rows: List[GroupRow],
+    total: float,
+) -> Tuple[BuiltAnswer, Optional[ChatPagination]]:
+    """One page of the complete, deterministically ordered list; ranks and shares use the full set."""
+    dim = spec.dimension or QueryDimension.CUSTOMER
+    if not rows:
+        return BuiltAnswer(message="", periods=[period], empty=True), None
+    size = spec.page_size
+    total_pages = max(1, -(-len(rows) // size))
+    page = min(spec.page, total_pages)
+    start = (page - 1) * size
+    shown = rows[start:start + size]
+    fp = filter_phrase(rf)
+    plural = _DIM_PLURAL[dim] if len(rows) != 1 else _DIM_SINGULAR[dim]
+    message = f"{len(rows)} {plural}{fp} in {period}, totalling {mt(total)}."
+    if total_pages > 1:
+        message += f" Showing {start + 1}–{start + len(shown)} of {len(rows)}, largest first."
+    facts = [
+        _fact("total_mt", "Total in scope", round_mt(total), UNIT),
+        _fact("group_count", f"{_DIM_PLURAL[dim].title()} with sales", len(rows)),
+    ]
+    if dim == QueryDimension.DISTRIBUTOR_SEGMENT:
+        distributors = len({r.key.split("|", 1)[0] for r in rows})
+        segments = len({r.key.split("|", 1)[1] for r in rows})
+        message = (
+            f"{distributors} distributors across {segments} segments{fp} in {period}: "
+            f"{len(rows)} distributor-segment combinations, totalling {mt(total)}."
+        )
+        if total_pages > 1:
+            message += f" Showing {start + 1}–{start + len(shown)} of {len(rows)}."
+        facts = [
+            _fact("total_mt", "Total in scope", round_mt(total), UNIT),
+            _fact("group_count", "Distributor-segment rows", len(rows)),
+            _fact("distributor_count", "Distributors", distributors),
+            _fact("segment_count", "Segments", segments),
+        ]
+    pagination = ChatPagination(
+        total_records=len(rows),
+        current_page=page,
+        page_size=size,
+        total_pages=total_pages,
+        first_record=start + 1,
+        last_record=start + len(shown),
+        entity=_DIM_PLURAL[dim],
+    )
+    names = (
+        [r.label for r in shown]
+        + [r.distributor for r in shown if r.distributor]
+        + [r.segment for r in shown if r.segment]
+    )
+    return (
+        BuiltAnswer(message=message, facts=facts, table=_rank_table(dim, shown, total, start=start + 1),
+                    periods=[period], names=names),
+        pagination,
+    )
+
+
+def _rank_table(dimension: QueryDimension, rows: Sequence[GroupRow], total: float, start: int = 1) -> ChatTable:
     with_dist = dimension == QueryDimension.CUSTOMER and any(r.distributor for r in rows)
+    with_segment = dimension == QueryDimension.DISTRIBUTOR_SEGMENT
     columns = [ChatTableColumn(key="rank", label="#", numeric=True),
-               ChatTableColumn(key="name", label=_DIM_SINGULAR[dimension].title())]
+               ChatTableColumn(key="name", label=_NAME_COLUMN.get(dimension, _DIM_SINGULAR[dimension].title()))]
     if with_dist:
         columns.append(ChatTableColumn(key="distributor", label="Distributor"))
+    if with_segment:
+        columns.append(ChatTableColumn(key="segment", label="Segment"))
     columns += [ChatTableColumn(key="quantity_mt", label="Quantity (MT)", numeric=True),
                 ChatTableColumn(key="share_pct", label="Share %", numeric=True)]
     out = []
-    for idx, r in enumerate(rows, start=1):
+    for idx, r in enumerate(rows, start=start):
         row: Dict[str, Any] = {"rank": idx, "name": r.label, "quantity_mt": r.quantity_mt,
                                "share_pct": pct(r.quantity_mt, total)}
         if with_dist:
             row["distributor"] = r.distributor or ""
+        if with_segment:
+            row["segment"] = r.segment or ""
         out.append(row)
     return ChatTable(columns=columns, rows=out)
 

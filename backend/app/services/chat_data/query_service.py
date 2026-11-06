@@ -52,11 +52,14 @@ class ResolvedFilters:
     product: Optional[str] = None
     customer_key: Optional[str] = None
     customer_name: Optional[str] = None
+    location: Optional[str] = None
 
     def display(self) -> Dict[str, str]:
         out: Dict[str, str] = {}
         if self.segment:
             out["Segment"] = self.segment
+        if self.location:
+            out["Location"] = self.location
         if self.distributor_name:
             out["Distributor"] = self.distributor_name
         if self.customer_name:
@@ -80,6 +83,8 @@ class GroupRow:
     label: str
     quantity_mt: float
     distributor: Optional[str] = None
+    segment: Optional[str] = None
+    count: Optional[int] = None
 
 
 @dataclass
@@ -127,6 +132,8 @@ class ChatQueryService:
             allowed_companies=self.scope.allowed_companies,
         )
         q = q.where(_not_report_footer())
+        if rf.location:
+            q = q.where(_location_key() == rf.location.strip().lower())
         if apply_customer and rf.customer_key:
             q = q.where(_customer_identity_expr() == rf.customer_key)
         return q
@@ -221,6 +228,41 @@ class ChatQueryService:
                 GroupRow(key=r.k, label=str(r.name or "").strip() or "Unspecified", quantity_mt=round_mt(r.mt))
                 for r in self.db.execute(q).all()
             ]
+        elif dimension == QueryDimension.LOCATION:
+            loc_key = _location_key()
+            q = self.scoped(
+                select(loc_key.label("k"), func.min(SalesRecord.location).label("name"), mt.label("mt")),
+                rf,
+                period,
+            ).where(loc_key != "").group_by(loc_key)
+            rows = [
+                GroupRow(key=r.k, label=" ".join(str(r.name or "").split()), quantity_mt=round_mt(r.mt))
+                for r in self.db.execute(q).all()
+            ]
+        elif dimension == QueryDimension.DISTRIBUTOR_SEGMENT:
+            seg_key = func.lower(func.trim(func.coalesce(SalesRecord.segment, "")))
+            q = self.scoped(
+                select(
+                    SalesRecord.distributor_id,
+                    seg_key.label("k"),
+                    func.min(company_expr()).label("name"),
+                    func.min(SalesRecord.segment).label("segment"),
+                    mt.label("mt"),
+                ),
+                rf,
+                period,
+            ).group_by(SalesRecord.distributor_id, seg_key)
+            rows = [
+                GroupRow(
+                    key=f"{r.distributor_id}|{r.k}",
+                    label=" ".join(str(r.name or "").split()),
+                    quantity_mt=round_mt(r.mt),
+                    segment=str(r.segment or "").strip() or "Unspecified",
+                )
+                for r in self.db.execute(q).all()
+            ]
+            # A directory-style list: alphabetical by distributor, then segment.
+            return sorted(rows, key=lambda g: (g.label.casefold(), g.segment.casefold(), g.key))
         elif dimension == QueryDimension.QUARTER:
             q = self.scoped(
                 select(Report.reporting_month, SalesRecord.source_month, mt.label("mt")),
@@ -251,6 +293,34 @@ class ChatQueryService:
             rows = []
         rows.sort(key=lambda g: (-g.quantity_mt, g.label.casefold()))
         return rows
+
+    def count_distinct(
+        self, rf: ResolvedFilters, period: Optional[PeriodRef], dimension: QueryDimension
+    ) -> Tuple[int, List[GroupRow]]:
+        """Distinct entities for ``dimension`` under the same filters as every other answer.
+
+        Customers and products use the same identity rules as ``total()`` so counts agree
+        with the KPI cards; other dimensions count their grouped rows. The groups are
+        returned so a small result can name its members.
+        """
+        rows = self.grouped(rf, period, dimension)
+        if dimension == QueryDimension.CUSTOMER:
+            return self.total(rf, period).customer_count, rows
+        if dimension == QueryDimension.PRODUCT:
+            return self.total(rf, period).product_count, rows
+        return len(rows), rows
+
+    def distributors_per_segment(self, rf: ResolvedFilters, period: Optional[PeriodRef]) -> List[GroupRow]:
+        """One row per segment with its distinct distributor count, largest count first."""
+        buckets: Dict[str, GroupRow] = {}
+        for pair in self.grouped(rf, period, QueryDimension.DISTRIBUTOR_SEGMENT):
+            seg_key = pair.key.split("|", 1)[1]
+            bucket = buckets.setdefault(
+                seg_key, GroupRow(key=seg_key, label=pair.segment or "Unspecified", quantity_mt=0.0, count=0)
+            )
+            bucket.count = (bucket.count or 0) + 1
+            bucket.quantity_mt = round_mt(bucket.quantity_mt + pair.quantity_mt)
+        return sorted(buckets.values(), key=lambda g: (-(g.count or 0), g.label.casefold()))
 
     def monthly(self, rf: ResolvedFilters, period: Optional[PeriodRef]) -> MonthlyResult:
         """Only rows that carry a real calendar month. Quarter/annual rows are reported apart."""
@@ -354,6 +424,10 @@ class ChatQueryService:
             if ym:
                 years.add(ym[0] if ym[1] >= 4 else ym[0] - 1)
         return sorted(years, reverse=True)
+
+
+def _location_key():
+    return func.lower(func.trim(func.coalesce(SalesRecord.location, "")))
 
 
 def _not_report_footer():

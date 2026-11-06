@@ -8,10 +8,12 @@ segment outside the caller's assignment returns the restricted message.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 from rapidfuzz import fuzz
+from rapidfuzz.distance import JaroWinkler
 from sqlalchemy import distinct, func, or_, select
 
 from app.constants.business_segments import BUSINESS_SEGMENTS, normalize_business_segment
@@ -46,6 +48,27 @@ class Resolution:
     target: Optional[AwaitingField] = None
     mention: Optional[str] = None
     options: List[str] = field(default_factory=list)
+    approximate: bool = False
+
+
+def _words(text: str) -> List[str]:
+    return re.findall(r"[A-Z0-9]+", (text or "").upper().replace("&", " AND "))
+
+
+def _strong_typo_match(mention: str, mention_key: str, name: str, name_key: str) -> bool:
+    """A misspelling of the name's leading words ("Geol" → GOEL MINERALS, "Chowdry Rubber" → CHOWDHRY RUBBER CO.).
+
+    Every typed word must closely match the name word in the same position, so a shared
+    generic word ("Rubber", "Industries") alone never produces a suggestion.
+    """
+    typed, words = _words(mention), _words(name)
+    if len(mention_key) >= 4 and typed and len(typed) <= len(words):
+        sims = [JaroWinkler.normalized_similarity(t, w) for t, w in zip(typed, words)]
+        if min(sims) >= 0.85 and sum(sims) / len(sims) >= 0.9 and len(typed[0]) >= 3:
+            return True
+    if len(mention_key) >= 6 and fuzz.ratio(mention_key, name_key[: len(mention_key)]) >= 90:
+        return True
+    return False
 
 
 def _customer_key(text: str) -> str:
@@ -142,6 +165,11 @@ class EntityResolver:
             if outcome.status != "ok":
                 return outcome
             rf.product = outcome.filters.product
+        if filters.location:
+            outcome = self._location(filters.location, rf)
+            if outcome.status != "ok":
+                return outcome
+            rf.location = outcome.filters.location
         if filters.customer:
             outcome = self._customer(filters.customer, rf)
             if outcome.status != "ok":
@@ -150,11 +178,32 @@ class EntityResolver:
             rf.customer_name = outcome.filters.customer_name
         return Resolution("ok", rf)
 
+    def _location(self, mention: str, rf: ResolvedFilters) -> Resolution:
+        q = self.qs.scoped(select(distinct(SalesRecord.location)), rf)
+        universe = sorted(
+            {" ".join(str(v or "").split()) for v in self.db.scalars(q).all()} - {""}, key=str.casefold
+        )
+        key = " ".join(mention.split()).casefold()
+        exact = [loc for loc in universe if loc.casefold() == key]
+        if exact:
+            return Resolution("ok", ResolvedFilters(location=exact[0]))
+        matches = [loc for loc in universe if len(key) >= 3 and key in loc.casefold()]
+        if len(matches) == 1:
+            return Resolution("ok", ResolvedFilters(location=matches[0]))
+        if matches:
+            return Resolution(
+                "ambiguous", target=AwaitingField.LOCATION, mention=mention, options=matches[:_MAX_OPTIONS]
+            )
+        return Resolution("not_found", target=AwaitingField.LOCATION, mention=mention)
+
     def _segment(self, mention: str) -> Resolution:
         canonical = normalize_business_segment(mention)
         known = next((s for s in BUSINESS_SEGMENTS if s.casefold() == canonical.casefold()), None)
         if known is None:
             known = next((s for s in self.segments() if s.casefold() == canonical.casefold()), None)
+        if known is None:
+            singular = canonical.casefold().rstrip("s")
+            known = next((s for s in self.segments() if s.casefold().rstrip("s") == singular), None)
         if known is None:
             return Resolution("not_found", target=AwaitingField.SEGMENT, mention=mention)
         if not self.scope.segment_allowed(known):
@@ -186,7 +235,9 @@ class EntityResolver:
         if not matches:
             folded = mention.casefold()
             matches = [
-                (i, n) for i, n in universe if fuzz.token_set_ratio(folded, n.casefold()) >= _FUZZY_DISTRIBUTOR
+                (i, n) for i, n, k in keyed
+                if fuzz.token_set_ratio(folded, n.casefold()) >= _FUZZY_DISTRIBUTOR
+                or _strong_typo_match(mention, key, n, k)
             ]
         matches = _dedupe(matches)
         # A semantic or fuzzy guess could be a different distributor: the user confirms it.
@@ -195,7 +246,10 @@ class EntityResolver:
             return Resolution("ok", ResolvedFilters(distributor_id=i, distributor_name=n))
         if matches:
             names = sorted({n for _, n in matches}, key=str.casefold)[:_MAX_OPTIONS]
-            return Resolution("ambiguous", target=AwaitingField.DISTRIBUTOR, mention=mention, options=names)
+            return Resolution(
+                "ambiguous", target=AwaitingField.DISTRIBUTOR, mention=mention, options=names,
+                approximate=approximate,
+            )
         return Resolution("not_found", target=AwaitingField.DISTRIBUTOR, mention=mention)
 
     def _product(self, mention: str) -> Resolution:
@@ -255,7 +309,12 @@ class EntityResolver:
             matches = [k for k in universe if key in k]
         if not matches:
             scored = [(fuzz.token_set_ratio(key, k), k) for k in universe]
-            matches = [k for score, k in sorted(scored, reverse=True) if score >= _FUZZY_CUSTOMER]
+            fuzzy = [k for score, k in sorted(scored, reverse=True) if score >= _FUZZY_CUSTOMER]
+            if fuzzy:
+                names = _dedupe(universe[k] for k in fuzzy)[:_MAX_OPTIONS]
+                return Resolution(
+                    "ambiguous", target=AwaitingField.CUSTOMER, mention=mention, options=names, approximate=True
+                )
         if len(matches) == 1:
             k = matches[0]
             return Resolution("ok", ResolvedFilters(customer_key=k, customer_name=universe[k]))

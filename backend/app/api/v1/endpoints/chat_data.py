@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.database.session import get_db
 from app.dependencies.rbac import RequestUser, RequireUser, data_scope_for_user
 from app.exceptions import AppException
-from app.schemas.chat_data import ChatAnswer, ChatAskRequest, ChatStatusResponse
+from app.schemas.chat_data import ChatAnswer, ChatAskRequest, ChatPageRequest, ChatStatusResponse
 from app.schemas.common import DataResponse
 from app.services.chat_data.orchestrator import ChatDataOrchestrator
 from app.services.chat_data.scope import ChatScope
@@ -93,4 +93,17 @@ def ask(
     _rate_limit(current)
     orchestrator = ChatDataOrchestrator(db, _scope(current, db))
     answer = orchestrator.ask(payload.question, payload.previous_spec)
+    return DataResponse(data=answer)
+
+
+@router.post("/page", summary="Another page of a full-list answer (no re-interpretation)")
+def page(
+    payload: ChatPageRequest,
+    current: RequireUser,
+    db: Session = Depends(get_db),
+) -> DataResponse[ChatAnswer]:
+    _require_enabled()
+    _rate_limit(current)
+    orchestrator = ChatDataOrchestrator(db, _scope(current, db))
+    answer = orchestrator.page(payload.spec, payload.page, payload.page_size)
     return DataResponse(data=answer)

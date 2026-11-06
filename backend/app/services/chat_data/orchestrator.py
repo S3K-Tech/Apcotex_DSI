@@ -20,6 +20,7 @@ from app.schemas.chat_data import (
     AwaitingField,
     ChatAnswer,
     ChatClarification,
+    ChatPagination,
     PeriodRef,
     QueryDimension,
     QueryIntent,
@@ -34,7 +35,10 @@ from app.services.chat_data.answer_builder import (
     build_breakdown,
     build_caveats,
     build_compare,
+    build_count,
+    build_count_per_segment,
     build_explain,
+    build_list,
     build_rank,
     build_trend,
     contributions,
@@ -42,7 +46,7 @@ from app.services.chat_data.answer_builder import (
     phrase_with_llm,
 )
 from app.services.chat_data.entity_resolver import EntityResolver, Resolution
-from app.services.chat_data.intent_service import IntentService, Interpretation, RuleHints
+from app.services.chat_data.intent_service import IntentService, Interpretation, RuleHints, explicit_distributor
 from app.services.chat_data.knowledge import KNOWLEDGE_DOCUMENTS
 from app.services.chat_data.periods import period_label, period_statement
 from app.services.chat_data.query_service import ChatQueryService, ResolvedFilters, UnitAudit
@@ -61,6 +65,11 @@ _KIND_LABEL = {
     AwaitingField.CUSTOMER: "customer",
     AwaitingField.PRODUCT: "product",
     AwaitingField.SEGMENT: "segment",
+    AwaitingField.LOCATION: "location",
+}
+_LEGACY_COUNT_DIMENSION = {
+    QueryMetric.CUSTOMER_COUNT: QueryDimension.CUSTOMER,
+    QueryMetric.PRODUCT_COUNT: QueryDimension.PRODUCT,
 }
 _AUDIT_STATUS = {
     "answer": AuditStatus.SUCCESS.value,
@@ -76,7 +85,7 @@ def _quarter_refinements(intent: QueryIntent, spec: QuerySpec, period: Optional[
     """Optional follow-ups that narrow a full-year answer to one quarter (never required)."""
     if period is None or period.quarter is not None or period.month is not None:
         return []
-    if intent not in (QueryIntent.RANK, QueryIntent.BREAKDOWN, QueryIntent.AGGREGATE):
+    if intent not in (QueryIntent.RANK, QueryIntent.LIST, QueryIntent.BREAKDOWN, QueryIntent.AGGREGATE):
         return []
     if spec.dimension in (QueryDimension.QUARTER, QueryDimension.MONTH):
         return []
@@ -144,6 +153,38 @@ class ChatDataOrchestrator:
         self._record_usage()
         self._audit(answer, interpretation)
         return answer
+
+    def page(self, spec: QuerySpec, page: int, page_size: Optional[int] = None) -> ChatAnswer:
+        """Another page of a LIST answer: same spec, no intent detection, filters re-resolved in scope."""
+        update: Dict[str, Any] = {"page": page}
+        if page_size is not None:
+            update["page_size"] = page_size
+        spec = QuerySpec.model_validate({**spec.model_dump(), **update})
+        answer: ChatAnswer
+        try:
+            with self.db.begin_nested():
+                answer = self._page(spec)
+        except SQLAlchemyError as exc:
+            logger.warning("Chat with Data page query failed: {}", type(exc).__name__)
+            answer = ChatAnswer(
+                status="error", message="This page could not be loaded. Please try again.", spec=spec
+            )
+        self._record_usage()
+        return answer
+
+    def _page(self, spec: QuerySpec) -> ChatAnswer:
+        if self.scope.has_no_access:
+            return ChatAnswer(
+                status="no_data",
+                message="No data access is assigned to your account. Please contact an administrator.",
+                scope_note=self.scope.describe(),
+            )
+        if spec.intent != QueryIntent.LIST or spec.dimension is None or not (spec.periods or spec.all_periods):
+            return ChatAnswer(status="error", message="Only full-list answers can be paged.", spec=spec)
+        resolution = self.resolver.resolve(spec.filters)
+        if resolution.status != "ok":
+            return self._resolution_answer(spec, resolution)
+        return self._execute(spec, resolution.filters)
 
     def suggestions(self) -> List[str]:
         if self.scope.has_no_access:
@@ -213,6 +254,8 @@ class ChatDataOrchestrator:
             return clarification, interpretation
 
         resolution = self.resolver.resolve(spec.filters)
+        if resolution.status != "ok" and resolution.target == AwaitingField.DISTRIBUTOR:
+            spec, resolution = self._maybe_customer(spec, resolution, question)
         if resolution.status != "ok":
             answer = self._resolution_answer(spec, resolution)
             answer.interpreted_by = source
@@ -221,6 +264,29 @@ class ChatDataOrchestrator:
         answer = self._execute(spec, resolution.filters)
         answer.interpreted_by = source
         return answer, interpretation
+
+    def _maybe_customer(
+        self, spec: QuerySpec, resolution: Resolution, question: str
+    ) -> Tuple[QuerySpec, Resolution]:
+        """A name the parser guessed was a distributor ("Sale for X") may be a customer.
+
+        Only when the user did not say "distributor", no customer is already named, and the
+        distributor match is not confident. A confident customer match wins over a
+        distributor spelling suggestion; otherwise the distributor outcome stands.
+        """
+        if spec.filters.customer or not spec.filters.distributor or explicit_distributor(question):
+            return spec, resolution
+        if spec.dimension == QueryDimension.CUSTOMER:
+            return spec, resolution
+        alt = spec.model_copy(deep=True)
+        alt.filters.customer, alt.filters.distributor = spec.filters.distributor, None
+        outcome = self.resolver.resolve(alt.filters)
+        if outcome.status == "ok":
+            return alt, outcome
+        if outcome.status == "ambiguous" and outcome.target == AwaitingField.CUSTOMER:
+            if not outcome.approximate or resolution.status == "not_found":
+                return alt, outcome
+        return spec, resolution
 
     def _hints(self) -> RuleHints:
         return RuleHints(
@@ -271,11 +337,18 @@ class ChatDataOrchestrator:
                     spec=None if spec.awaiting is None else spec,
                 )
             return self._clarify(spec, question, awaiting, options)
-        if spec.intent in (QueryIntent.RANK, QueryIntent.BREAKDOWN) and spec.dimension is None:
-            word = "Top" if spec.intent == QueryIntent.RANK else "Break down by"
+        if spec.intent in (QueryIntent.RANK, QueryIntent.LIST, QueryIntent.BREAKDOWN) and spec.dimension is None:
+            word = {QueryIntent.RANK: "Top", QueryIntent.LIST: "List"}.get(spec.intent, "Break down by")
             return self._clarify(
                 spec,
                 f"{word} what — customers, products, distributors or segments?",
+                AwaitingField.DIMENSION,
+                _DIMENSION_OPTIONS,
+            )
+        if spec.intent == QueryIntent.AGGREGATE and spec.metric == QueryMetric.ENTITY_COUNT and spec.dimension is None:
+            return self._clarify(
+                spec,
+                "Count what — customers, products, distributors or segments?",
                 AwaitingField.DIMENSION,
                 _DIMENSION_OPTIONS,
             )
@@ -318,12 +391,14 @@ class ChatDataOrchestrator:
                     f"I couldn't find an exact {kind} match for “{resolution.mention}”. "
                     f"Did you mean {resolution.options[0]}?"
                 )
+                cleared.suggestion = resolution.options[0]
             else:
                 question = f"More than one {kind} matches “{resolution.mention}”. Which one do you mean?"
             return self._clarify(cleared, question, field, resolution.options)
-        message = f"I couldn't find a {kind} matching “{resolution.mention}” in the data you can access."
-        if field == AwaitingField.DISTRIBUTOR:
-            message += f" If you meant a customer, ask about “customer {resolution.mention}”."
+        message = (
+            f"No matching {kind} was found for “{resolution.mention}” in the data available to you. "
+            f"Please check the {kind} name or try another name."
+        )
         return ChatAnswer(
             status="no_data",
             message=message,
@@ -340,17 +415,43 @@ class ChatDataOrchestrator:
         intent = spec.intent
         if intent == QueryIntent.AGGREGATE and len(periods) == 2:
             intent = QueryIntent.COMPARE
-        if intent in (QueryIntent.RANK, QueryIntent.BREAKDOWN, QueryIntent.TREND, QueryIntent.AGGREGATE) and len(periods) > 1:
+        if intent in (
+            QueryIntent.RANK, QueryIntent.LIST, QueryIntent.BREAKDOWN, QueryIntent.TREND, QueryIntent.AGGREGATE
+        ) and len(periods) > 1:
             caveats.append(f"Only the first period ({labels[0]}) was used for this question.")
             periods, labels = periods[:1], labels[:1]
         if spec.metric != QueryMetric.QUANTITY_MT and intent != QueryIntent.AGGREGATE:
             spec = spec.model_copy(update={"metric": QueryMetric.QUANTITY_MT})
+        if spec.metric in _LEGACY_COUNT_DIMENSION:
+            spec = spec.model_copy(
+                update={"metric": QueryMetric.ENTITY_COUNT, "dimension": _LEGACY_COUNT_DIMENSION[spec.metric]}
+            )
 
         period = periods[0]
         monthly = None
+        pagination: Optional[ChatPagination] = None
         built: BuiltAnswer
-        if intent == QueryIntent.AGGREGATE:
+        if (
+            intent == QueryIntent.AGGREGATE
+            and spec.metric == QueryMetric.ENTITY_COUNT
+            and spec.dimension == QueryDimension.DISTRIBUTOR
+            and spec.per == QueryDimension.SEGMENT
+        ):
+            distinct, _ = self.qs.count_distinct(rf, period, QueryDimension.DISTRIBUTOR)
+            built = build_count_per_segment(rf, labels[0], self.qs.distributors_per_segment(rf, period), distinct)
+        elif intent == QueryIntent.AGGREGATE and spec.metric == QueryMetric.ENTITY_COUNT:
+            dim = spec.dimension or QueryDimension.CUSTOMER
+            count, groups = self.qs.count_distinct(rf, period, dim)
+            built = build_count(spec, rf, labels[0], self.qs.total(rf, period), dim, count, groups)
+        elif intent == QueryIntent.AGGREGATE:
             built = build_aggregate(spec, rf, labels[0], self.qs.total(rf, period))
+        elif intent == QueryIntent.LIST:
+            dim = spec.dimension or QueryDimension.CUSTOMER
+            if dim == QueryDimension.MONTH:
+                monthly = self.qs.monthly(rf, period)
+            rows = self.qs.grouped(rf, period, dim)
+            total = self.qs.total(rf, period).quantity_mt
+            built, pagination = build_list(spec, rf, labels[0], rows, total)
         elif intent in (QueryIntent.RANK, QueryIntent.BREAKDOWN):
             dim = spec.dimension or QueryDimension.CUSTOMER
             if dim == QueryDimension.MONTH:
@@ -429,6 +530,7 @@ class ChatDataOrchestrator:
             narrative_source=source,
             facts=built.facts,
             table=built.table,
+            pagination=pagination,
             unit=UNIT,
             periods=labels,
             filters=rf.display(),
@@ -447,10 +549,14 @@ class ChatDataOrchestrator:
                 "distributor": rf.distributor_name,
                 "product": rf.product,
                 "customer": rf.customer_name,
+                "location": rf.location,
             }
         )
         return spec.model_copy(
-            update={"filters": filters, "awaiting": None, "clarification_question": None, "pending_quarters": []}
+            update={
+                "filters": filters, "awaiting": None, "clarification_question": None,
+                "pending_quarters": [], "suggestion": None,
+            }
         )
 
     # ---- logging --------------------------------------------------------------------

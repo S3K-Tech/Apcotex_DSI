@@ -595,12 +595,23 @@ export interface ChatDataTable {
   rows: Record<string, string | number | null>[];
 }
 
+export interface ChatDataPagination {
+  total_records: number;
+  current_page: number;
+  page_size: number;
+  total_pages: number;
+  first_record: number;
+  last_record: number;
+  entity: string;
+}
+
 export interface ChatDataAnswer {
   status: ChatDataStatus;
   message: string;
   narrative_source: 'template' | 'llm_verified';
   facts: ChatDataFact[];
   table?: ChatDataTable | null;
+  pagination?: ChatDataPagination | null;
   unit?: string | null;
   periods: string[];
   filters: Record<string, string>;

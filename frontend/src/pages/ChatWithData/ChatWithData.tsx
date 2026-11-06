@@ -11,6 +11,7 @@ import {
   Send,
 } from 'lucide-react';
 import { ApiError } from '../../api/client';
+import { Pagination } from '../../components/ui/Pagination';
 import { BG, BLUE, BORDER, RED, TEAL, TEXT, TEXT_SECONDARY } from '../../constants/theme';
 import { chatWithDataService } from '../../services/chatWithData.service';
 import type {
@@ -24,7 +25,7 @@ import type {
 
 type ThreadItem =
   | { id: number; role: 'user'; text: string }
-  | { id: number; role: 'assistant'; answer: ChatDataAnswer };
+  | { id: number; role: 'assistant'; answer: ChatDataAnswer; paging?: boolean; pageError?: string | null };
 
 const STATUS_STYLE: Record<
   ChatDataStatus,
@@ -129,12 +130,19 @@ function AnswerCard({
   onOption,
   disabled,
   latest,
+  onPage,
+  paging = false,
+  pageError = null,
 }: {
   answer: ChatDataAnswer;
   onOption: (text: string) => void;
   disabled: boolean;
   latest: boolean;
+  onPage?: (page: number) => void;
+  paging?: boolean;
+  pageError?: string | null;
 }) {
+  const pagination = answer.status === 'answer' ? answer.pagination : null;
   const badge = STATUS_STYLE[answer.status];
   const showFacts = answer.status === 'answer' && answer.facts.length > 0;
   const filterEntries = Object.entries(answer.filters || {});
@@ -206,7 +214,34 @@ function AnswerCard({
         </div>
       )}
 
-      {answer.table && <ResultTable table={answer.table} />}
+      {answer.table && (
+        <div style={{ opacity: paging ? 0.55 : 1, transition: 'opacity 0.15s' }} aria-busy={paging}>
+          <ResultTable table={answer.table} />
+        </div>
+      )}
+
+      {pagination && onPage && (
+        <Pagination
+          currentPage={pagination.current_page}
+          totalPages={pagination.total_pages}
+          totalRecords={pagination.total_records}
+          firstRecord={pagination.first_record}
+          lastRecord={pagination.last_record}
+          entity={pagination.entity}
+          disabled={paging || disabled}
+          onPageChange={onPage}
+        />
+      )}
+      {paging && (
+        <div role="status" style={{ marginTop: 6, fontSize: '0.75rem', color: TEXT_SECONDARY }}>
+          Loading page…
+        </div>
+      )}
+      {pageError && (
+        <div role="alert" style={{ marginTop: 6, fontSize: '0.75rem', color: RED }}>
+          {pageError}
+        </div>
+      )}
 
       {answer.clarification && answer.clarification.options.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }} role="group" aria-label="Suggested answers">
@@ -323,7 +358,7 @@ export function ChatWithData() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [thread, loading]);
+  }, [thread.length, loading]);
 
   const maxChars = availability?.max_question_chars ?? 500;
   const enabled = availability?.enabled === true;
@@ -359,6 +394,26 @@ export function ChatWithData() {
     },
     [enabled, lastSpec, loading, maxChars],
   );
+
+  const turnPage = useCallback(async (itemId: number, spec: ChatQuerySpec, isLatest: boolean, page: number) => {
+    const update = (patch: Partial<Extract<ThreadItem, { role: 'assistant' }>>) =>
+      setThread(t => t.map(i => (i.id === itemId && i.role === 'assistant' ? { ...i, ...patch } : i)));
+    update({ paging: true, pageError: null });
+    try {
+      const answer = await chatWithDataService.page(spec, page);
+      if (answer.status !== 'answer') {
+        update({ paging: false, pageError: answer.message || 'This page could not be loaded.' });
+        return;
+      }
+      update({ answer, paging: false, pageError: null });
+      if (isLatest && answer.spec) setLastSpec(answer.spec);
+    } catch (err) {
+      let message = 'This page could not be loaded. Please try again.';
+      if (err instanceof ApiError && err.status === 401) message = 'Your session has expired. Please sign in again.';
+      else if (err instanceof ApiError && err.message) message = err.message;
+      update({ paging: false, pageError: message });
+    }
+  }, []);
 
   const reset = () => {
     abortRef.current?.abort();
@@ -537,6 +592,13 @@ export function ChatWithData() {
                     onOption={opt => void send(opt)}
                     disabled={loading}
                     latest={index === thread.length - 1}
+                    onPage={
+                      item.answer.spec
+                        ? page => void turnPage(item.id, item.answer.spec as ChatQuerySpec, index === thread.length - 1, page)
+                        : undefined
+                    }
+                    paging={item.paging}
+                    pageError={item.pageError}
                   />
                 </div>
               ),

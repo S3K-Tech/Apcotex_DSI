@@ -110,7 +110,8 @@ def test_rule_intents():
     assert p.parse("Compare FY 2025-26 vs FY 2026-27").intent == QueryIntent.COMPARE
     assert p.parse("Why did sales change between Q1 and Q2 FY 2026-27?").intent == QueryIntent.EXPLAIN_CHANGE
     count = p.parse("How many customers bought in FY 2026-27?")
-    assert count.intent == QueryIntent.AGGREGATE and count.metric == QueryMetric.CUSTOMER_COUNT
+    assert count.intent == QueryIntent.AGGREGATE and count.metric == QueryMetric.ENTITY_COUNT
+    assert count.dimension == QueryDimension.CUSTOMER
 
 
 @pytest.mark.parametrize(

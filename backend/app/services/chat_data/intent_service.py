@@ -83,8 +83,69 @@ _DIMENSIONS: List[Tuple[re.Pattern, QueryDimension]] = [
     (re.compile(r"\bsegments?\b|\bsegment[- ]wise\b", re.I), QueryDimension.SEGMENT),
     (re.compile(r"\bquarters?\b|\bquarter[- ]wise\b|\bquarterly\b", re.I), QueryDimension.QUARTER),
     (re.compile(r"\bmonths?\b|\bmonth[- ]wise\b", re.I), QueryDimension.MONTH),
+    (re.compile(r"\blocations?\b|\blocation[- ]wise\b|\bcity\b|\bcities\b", re.I), QueryDimension.LOCATION),
 ]
-_CLEAR_FILTER_RE = re.compile(r"\ball\s+(distributors|segments|products|customers)\b", re.I)
+_DIM_WORDS = (
+    r"(?:customers?|buyers?|clients?|products?|grades?|items?|distributors?|dealers?|"
+    r"channel partners?|segments?|locations?|city|cities)"
+)
+_LIST_RE = re.compile(
+    r"\b(?:list|enumerate)\b"
+    r"|\b(?:all|every|complete|entire|full)\s+(?:list\s+of\s+|the\s+)?(?:\w+\s+)?" + _DIM_WORDS + r"\b"
+    r"|^\s*(?:which|who|what)\s+(?:are\s+)?(?:all\s+)?(?:the\s+)?" + _DIM_WORDS + r"\b"
+    r"|^\s*(?:show|display|give)\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?"
+    r"(?:customers|buyers|clients|products|grades|distributors|dealers|segments|locations|cities)\b",
+    re.I,
+)
+_WITH_SEGMENTS_RE = re.compile(
+    r"\b(?:with|and|along\s+with|alongside|plus|including)\s+(?:their|its|the)?\s*"
+    r"(?:respective\s+|associated\s+)?(?:business\s+)?segments?\b",
+    re.I,
+)
+_PER_SEGMENT_RE = re.compile(r"\b(?:each|every|per|by)\s+(?:business\s+)?segment\b|\bsegment[- ]?wise\b", re.I)
+_LIST_GUARD_RE = re.compile(r"\b(total|sum|how much)\b", re.I)
+_MENTION_END = (
+    r"(?=\s+(?:in|for|during|from|of|by|with|across|between|under|sells?|sold|selling|supplies|supplied|"
+    r"buys?|bought|has|have|had|does|did|top|bottom|highest|lowest|largest|biggest|best|leading|"
+    r"total|quantity|sales|monthly|quarterly|trend|breakdown)\b|[?.!]*\s*$)"
+)
+_NAME_STOP = (
+    r"(?!(?:in|for|during|from|of|by|with|across|between|under|at|on|the|this|that|these|those|"
+    r"sells?|sold|selling|supplies|supplied|buys?|bought|has|have|had|is|are|was|were|does|did|do|"
+    r"wise|count|list|names?|and|along|alongside|plus|including|with|operat\w*|their|its)\b)"
+)
+_KEYWORD_NAME = r"[\"“']?([A-Za-z0-9&.,()'\- ]{2,80}?)[\"”']?"
+_DISTRIBUTOR_MENTION_RE = re.compile(r"\b(?:distributor|dealer)\s+" + _NAME_STOP + _KEYWORD_NAME + _MENTION_END, re.I)
+_PRODUCT_MENTION_RE = re.compile(r"\b(?:product|grade)\s+" + _NAME_STOP + _KEYWORD_NAME + _MENTION_END, re.I)
+_LOCATION_MENTION_RE = re.compile(r"\b(?:location|city)\s+" + _NAME_STOP + _KEYWORD_NAME + _MENTION_END, re.I)
+# "sells to ROOP RUBBER MILLS": the buyer named after a supply verb. "this customer" is left
+# to follow-up inheritance.
+_SELL_TO_RE = re.compile(
+    r"\b(?:sells?|selling|sold|sales?|supplie[sd]|supply|supplying|deliver(?:s|ed|ing|ies|y)?|"
+    r"dispatch(?:ed|es)?|despatch(?:ed|es)?|quantity|volume)\s+(?:to)\s+"
+    r"(?!(?:this|that|these|those|the|our|my)\s+(?:customers?|buyers?|clients?)\b|(?:it|them|him|her)\b)"
+    r"(?:customer\s+)?" + _KEYWORD_NAME + _MENTION_END,
+    re.I,
+)
+# "How much did X purchase?": the buyer is the subject of a purchase verb.
+_PURCHASER_RE = re.compile(
+    r"\b(?:did|does|has|have)\s+(?:customer\s+)?" + _NAME_STOP
+    + r"(?!(?:customers?|buyers?|clients?|they|we|you|i|all|each|every|anyone|someone|it)\b)"
+    + r"[\"“']?([A-Za-z0-9&.,()'\- ]{3,80}?)[\"”']?\s+(?:purchase[sd]?|buy|bought|order(?:ed)?|lift(?:ed)?|take|took)\b",
+    re.I,
+)
+_YES_RE = re.compile(r"^\s*(?:yes|y|yeah|yep|yup|correct|right|ok|okay|sure|haan|ha)\b[\s.!,]*(?:please|that one|it is)?[\s.!]*$", re.I)
+_ENTITY_KEYWORDS = {"customer", "customers", "distributor", "distributors", "dealer", "product", "products",
+                    "grade", "location", "city"}
+_DIMENSION_FILTER = {
+    QueryDimension.CUSTOMER: "customer",
+    QueryDimension.PRODUCT: "product",
+    QueryDimension.DISTRIBUTOR: "distributor",
+    QueryDimension.SEGMENT: "segment",
+    QueryDimension.LOCATION: "location",
+    QueryDimension.DISTRIBUTOR_SEGMENT: "distributor",
+}
+_CLEAR_FILTER_RE = re.compile(r"\ball\s+(distributors|segments|products|customers|locations)\b", re.I)
 _LIMIT_RE = re.compile(r"\b(?:top|bottom|first|best|largest|highest|lowest)\s+(\d{1,3})\b|\b(\d{1,3})\s+(?:customers|products|distributors|segments|months|quarters)\b", re.I)
 _WORD_NUMBERS = {"three": 3, "five": 5, "ten": 10, "twenty": 20, "fifteen": 15, "seven": 7}
 _WORD_LIMIT_RE = re.compile(r"\btop\s+(" + "|".join(_WORD_NUMBERS) + r")\b", re.I)
@@ -92,8 +153,7 @@ _WORD_LIMIT_RE = re.compile(r"\btop\s+(" + "|".join(_WORD_NUMBERS) + r")\b", re.
 # with a preposition, and only trailing punctuation ends it (initials like "A.B" stay whole).
 _CUSTOMER_MENTION_RE = re.compile(
     r"\bcustomer\s+(?!(?:in|for|during|from|of|by|with|across|between|under|at|on|the)\b)"
-    r"[\"“']?([A-Za-z0-9&.,()'\- ]{3,80}?)[\"”']?"
-    r"(?=\s+(?:in|for|during|from|of|by|with|across|between)\b|[?.!]*\s*$)",
+    r"[\"“']?([A-Za-z0-9&.,()'\- ]{3,80}?)[\"”']?" + _MENTION_END,
     re.I,
 )
 _QUOTED_RE = re.compile(r"[\"“]([^\"”]{2,80})[\"”]")
@@ -321,6 +381,33 @@ def _leading_entity(text: str, taken: Set[Optional[str]], product_words: Set[str
     return name if len(name) >= 3 else None
 
 
+_NAMED_SEGMENT_RE = re.compile(
+    r"\b(?:in|of|for|from|within)\s+(?:the\s+)?([A-Za-z][A-Za-z&\-]+(?:\s+[A-Za-z&\-]+)?)\s+segment\b", re.I
+)
+_NOT_SEGMENT_NAMES = {"each", "every", "per", "business", "which", "this", "that", "their", "its", "a", "any", "all"}
+
+
+def _named_segment(text: str) -> Optional[str]:
+    """ "in the Adhesives segment": a segment outside the alias list, resolved against data later."""
+    m = _NAMED_SEGMENT_RE.search(text)
+    if not m or m.group(1).split()[0].lower() in _NOT_SEGMENT_NAMES:
+        return None
+    return m.group(1)
+
+
+def explicit_distributor(text: str) -> bool:
+    """The user typed "distributor <name>", so the name must not be re-read as another entity."""
+    return _keyword_mention(_DISTRIBUTOR_MENTION_RE, text) is not None
+
+
+def _keyword_mention(pattern: re.Pattern, text: str) -> Optional[str]:
+    m = pattern.search(text)
+    if not m:
+        return None
+    name = m.group(1).strip(" ,.")
+    return name if len(name) >= 2 else None
+
+
 def _compact(value: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", normalize_distributor_name(value))
 
@@ -356,6 +443,11 @@ class RuleParser:
 
     def filters(self, text: str) -> QueryFilters:
         distributor = _name_mention(text, self.hints.distributor_names, _compact, 4)
+        explicit_distributor = _keyword_mention(_DISTRIBUTOR_MENTION_RE, text)
+        if explicit_distributor and (
+            distributor is None or _compact(distributor) not in _compact(explicit_distributor)
+        ):
+            distributor = explicit_distributor
         product = None
         haystack = _product_compact(text)
         best = 0
@@ -363,29 +455,42 @@ class RuleParser:
             key = _product_compact(name)
             if len(key.strip()) >= 3 and key in haystack and len(key) > best:
                 product, best = name, len(key)
+        if product is None:
+            product = _keyword_mention(_PRODUCT_MENTION_RE, text)
+        location = _keyword_mention(_LOCATION_MENTION_RE, text)
         customer = None
         m = _CUSTOMER_MENTION_RE.search(text)
         if m and not re.match(r"^(s|count|wise|base|list)\b", m.group(1), re.I):
             customer = m.group(1).strip(" ,.")
         if not customer:
+            customer = _keyword_mention(_SELL_TO_RE, text) or _keyword_mention(_PURCHASER_RE, text)
+        if not customer:
             q = _QUOTED_RE.search(text)
-            if q and q.group(1).strip() not in {distributor, product}:
+            if q and q.group(1).strip() not in {distributor, product, location}:
                 customer = q.group(1).strip()
         if distributor is None:
             without_customer = re.sub(re.escape(customer), " ", text, flags=re.I) if customer else text
             distributor = _distributor_prefix_mention(without_customer, self.hints.distributor_names)
         # Segment words inside an entity name ("Secret Glove Co", "NBR LATEX") are not segments.
         segment_text = _QUOTED_RE.sub(" ", text)
-        for name in (customer, distributor, product):
+        for name in (customer, distributor, product, location):
             if name:
                 segment_text = re.sub(re.escape(name), " ", segment_text, flags=re.I)
-        segment = _segment_mention(segment_text)
+        segment = _segment_mention(segment_text) or _named_segment(segment_text)
+        guessed = None
         if distributor is None:
-            distributor = self._unknown_named_entity(text, {segment, product, customer})
-        if distributor is None and not customer:
+            guessed = self._unknown_named_entity(text, {segment, product, customer, location})
+        if guessed is None and distributor is None and not customer and not location:
             product_words = {w for p in self.hints.product_names for w, _, _ in _name_tokens(p)}
-            distributor = _leading_entity(text, {segment, product, customer}, product_words)
-        return QueryFilters(segment=segment, distributor=distributor, product=product, customer=customer)
+            guessed = _leading_entity(text, {segment, product, customer}, product_words)
+        if guessed is not None:
+            # "Sale for SIDHARTH RUBBER PVT LTD": "Rubber" there is part of the name, not a segment.
+            distributor = guessed
+            rest = re.sub(re.escape(guessed), " ", segment_text, flags=re.I)
+            segment = _segment_mention(rest) or _named_segment(rest)
+        return QueryFilters(
+            segment=segment, distributor=distributor, product=product, customer=customer, location=location
+        )
 
     @staticmethod
     def _unknown_named_entity(text: str, taken: Set[Optional[str]]) -> Optional[str]:
@@ -399,12 +504,14 @@ class RuleParser:
             words = m.group(1).split()
             while words and words[0].lower() in _NOT_ENTITY_WORDS:
                 words = words[1:]
+            if words and words[0].lower() in _ENTITY_KEYWORDS:
+                continue
             cut = next((i for i, w in enumerate(words) if w.lower().strip(".") in _NOT_ENTITY_WORDS), len(words))
             words = words[:cut]
             name = " ".join(words).strip(" .,&")
             if len(name) < 3 or name.lower() in segment_words:
                 continue
-            if any(t and name.casefold() == t.casefold() for t in taken):
+            if any(t and name.casefold() in t.casefold() for t in taken):
                 continue
             if _QUARTER_RE.fullmatch(name) or re.fullmatch(r"[\d\-–/ ]+", name):
                 continue
@@ -443,27 +550,31 @@ class RuleParser:
             intent, direction, anchor = QueryIntent.RANK, SortDirection.ASC, m.start()
         elif (m := _RANK_DESC_RE.search(text)) is not None and not _COUNT_RE.search(text):
             intent, anchor = QueryIntent.RANK, m.start()
-        elif _COUNT_RE.search(text):
+        elif (m := _COUNT_RE.search(text)) is not None:
             intent = QueryIntent.AGGREGATE
-            dim = _dimension_after(text, _COUNT_RE.search(text).start())
-            if dim == QueryDimension.CUSTOMER:
-                metric = QueryMetric.CUSTOMER_COUNT
-            elif dim == QueryDimension.PRODUCT:
-                metric = QueryMetric.PRODUCT_COUNT
-            else:
-                return QuerySpec(
-                    intent=QueryIntent.UNSUPPORTED,
-                    unsupported_reason="I can count customers or products. Other counts are not supported yet.",
-                )
+            dimension = _dimension_after(text, m.start())
+            if dimension is not None or not _AGG_RE.search(text):
+                metric = QueryMetric.ENTITY_COUNT
+        elif (m := _LIST_RE.search(text)) is not None and not _LIST_GUARD_RE.search(text):
+            intent, anchor = QueryIntent.LIST, m.start()
         elif _BREAKDOWN_RE.search(text) and _dimension_after(text, None) is not None:
             intent = QueryIntent.BREAKDOWN
         elif _AGG_RE.search(text):
             intent = QueryIntent.AGGREGATE
 
-        if intent in (QueryIntent.RANK, QueryIntent.BREAKDOWN):
+        if intent in (QueryIntent.RANK, QueryIntent.LIST, QueryIntent.BREAKDOWN):
             dimension = _dimension_after(text, anchor)
             if intent == QueryIntent.BREAKDOWN and dimension is None:
                 intent = QueryIntent.AGGREGATE
+        if intent == QueryIntent.LIST and dimension == QueryDimension.DISTRIBUTOR and _WITH_SEGMENTS_RE.search(text):
+            dimension = QueryDimension.DISTRIBUTOR_SEGMENT
+        per_dimension = None
+        if (
+            metric == QueryMetric.ENTITY_COUNT
+            and dimension == QueryDimension.DISTRIBUTOR
+            and _PER_SEGMENT_RE.search(text)
+        ):
+            per_dimension = QueryDimension.SEGMENT
 
         if intent is None and previous is not None:
             return self._follow_up(text, previous, per, found_filters, limit)
@@ -488,6 +599,7 @@ class RuleParser:
             intent=intent,
             metric=metric,
             dimension=dimension,
+            per=per_dimension,
             filters=found_filters,
             periods=per.periods[:2],
             all_periods=per.all_periods,
@@ -503,7 +615,15 @@ class RuleParser:
     def _inherit(self, spec: QuerySpec, previous: QuerySpec, text: str, per: _Periods, found: QueryFilters) -> QuerySpec:
         data = spec.model_dump()
         prev_filters = previous.filters.model_dump()
+        # Listing or counting a dimension spans all of its members unless the question names one.
+        enumerated = (
+            _DIMENSION_FILTER.get(spec.dimension)
+            if spec.intent == QueryIntent.LIST or spec.metric == QueryMetric.ENTITY_COUNT
+            else None
+        )
         for key, value in prev_filters.items():
+            if key == enumerated:
+                continue
             if data["filters"].get(key) is None and value:
                 data["filters"][key] = value
         for m in _CLEAR_FILTER_RE.finditer(text):
@@ -521,6 +641,8 @@ class RuleParser:
         data = previous.model_dump()
         data["awaiting"] = None
         data["clarification_question"] = None
+        data["suggestion"] = None
+        data["page"] = 1
         for key, value in found.model_dump().items():
             if value:
                 data["filters"][key] = value
@@ -539,7 +661,7 @@ class RuleParser:
         if limit:
             data["limit"] = limit
         dim = _dimension_after(text, None)
-        if dim is not None and previous.intent in (QueryIntent.RANK, QueryIntent.BREAKDOWN):
+        if dim is not None and previous.intent in (QueryIntent.RANK, QueryIntent.LIST, QueryIntent.BREAKDOWN):
             data["dimension"] = dim
         elif dim is not None and previous.intent == QueryIntent.AGGREGATE:
             data["intent"] = QueryIntent.BREAKDOWN
@@ -581,8 +703,11 @@ class RuleParser:
             data["dimension"] = dim
             return QuerySpec.model_validate(data)
         field_name = awaiting.value if awaiting else None
-        if field_name in {"distributor", "customer", "product", "segment"}:
+        if field_name in {"distributor", "customer", "product", "segment", "location"}:
             choice = " ".join(text.split())[:200]
+            data["suggestion"] = None
+            if previous.suggestion and _YES_RE.match(choice):
+                choice = previous.suggestion
             looks_like_question = bool(
                 extract_periods(choice).periods
                 or _RANK_DESC_RE.search(choice)
@@ -630,10 +755,11 @@ class RuleParser:
 _SYSTEM_PROMPT = """You convert a business question about distributor sales quantities into JSON.
 Return ONLY one JSON object, no prose, matching this schema:
 {
- "intent": "aggregate"|"rank"|"breakdown"|"compare"|"trend"|"explain_change"|"clarify"|"unsupported",
- "metric": "quantity_mt"|"customer_count"|"product_count",
- "dimension": null|"customer"|"product"|"distributor"|"segment"|"quarter"|"month",
- "filters": {"segment": str|null, "distributor": str|null, "customer": str|null, "product": str|null},
+ "intent": "aggregate"|"rank"|"list"|"breakdown"|"compare"|"trend"|"explain_change"|"clarify"|"unsupported",
+ "metric": "quantity_mt"|"entity_count",
+ "dimension": null|"customer"|"product"|"distributor"|"segment"|"location"|"quarter"|"month"|"distributor_segment",
+ "per": null|"segment",
+ "filters": {"segment": str|null, "distributor": str|null, "customer": str|null, "product": str|null, "location": str|null},
  "periods": [{"fy_start": int, "quarter": int|null, "month": int|null}],
  "all_periods": bool,
  "direction": "desc"|"asc",
@@ -644,9 +770,9 @@ Return ONLY one JSON object, no prose, matching this schema:
 Rules:
 - Indian financial year April-March. fy_start 2026 means FY 2026-27. Q1=Apr-Jun, Q2=Jul-Sep, Q3=Oct-Dec, Q4=Jan-Mar.
 - Only use years written in the question or in previous_spec. Never assume the current year. If a quarter or month has no year and previous_spec has none, use intent "clarify".
-- "rank" = top/bottom N by quantity (needs dimension). "breakdown" = quantity split by a dimension. "compare" = two periods. "explain_change" = which customers/products contributed to a change between two periods. "trend" = monthly quantities in a financial year (dimension "month").
+- "rank" = top/bottom N by quantity (needs dimension). "list" = every member of a dimension ("list all customers of X", "which distributor sells to Y"; needs dimension, no limit). "how many <customers|products|distributors|segments|locations>" = intent "aggregate", metric "entity_count", dimension set to what is counted ("how many distributors in each segment" adds "per": "segment"). "list all distributors with their segments" = intent "list", dimension "distributor_segment". "breakdown" = quantity split by a dimension. "compare" = two periods. "explain_change" = which customers/products contributed to a change between two periods. "trend" = monthly quantities in a financial year (dimension "month").
 - At most 2 periods. limit between 1 and 50, default 10.
-- Copy entity names exactly as the user wrote them into filters. Do not invent names.
+- Copy entity names exactly as the user wrote them into filters. Do not invent names. A name after the word "customer" is a customer, after "distributor" a distributor, after "product" a product. A name after "sells to" / "supplied to" is a customer.
 - Data has quantities only (MT). Revenue, price, value, forecasts, personal data, or data changes => "unsupported" with a short reason.
 - For follow-up questions, start from previous_spec and change only what the user asked to change.
 - Ambiguous or incomplete questions => "clarify" with one short question."""
@@ -707,7 +833,8 @@ class IntentService:
         user_payload: Dict[str, Any] = {"question": question}
         if previous is not None:
             user_payload["previous_spec"] = previous.model_dump(
-                mode="json", exclude={"awaiting", "pending_quarters", "clarification_question", "unsupported_reason"}
+                mode="json",
+                exclude={"awaiting", "pending_quarters", "clarification_question", "unsupported_reason", "suggestion"},
             )
         if self.knowledge:
             user_payload["glossary"] = self.knowledge[:4]
@@ -725,6 +852,7 @@ class IntentService:
             spec = QuerySpec.model_validate(data)
         except ValidationError as exc:
             raise ValueError("Model JSON failed QuerySpec validation") from exc
+        spec = self._align_with_rules(spec, question, previous)
         spec = self._ground_periods(spec, question, previous)
         return Interpretation(
             spec=spec,
@@ -732,6 +860,41 @@ class IntentService:
             usage=completion.usage(),
             model_id=getattr(completion, "model_id", None),
         )
+
+    def _align_with_rules(self, spec: QuerySpec, question: str, previous: Optional[QuerySpec]) -> QuerySpec:
+        """Unambiguous wording wins over the model: "top N" ranks, "list all" lists, "how many" counts,
+        and a name after an explicit entity keyword keeps that entity type."""
+        ruled = self.rules.parse(question, previous)
+        update: Dict[str, Any] = {}
+        shape_fixed = ruled.intent in (QueryIntent.RANK, QueryIntent.LIST) or ruled.metric == QueryMetric.ENTITY_COUNT
+        if shape_fixed and ruled.dimension is not None and (
+            spec.intent != ruled.intent or spec.metric != ruled.metric or spec.dimension != ruled.dimension
+            or spec.per != ruled.per
+        ):
+            update.update(
+                intent=ruled.intent, metric=ruled.metric, dimension=ruled.dimension, per=ruled.per,
+                direction=ruled.direction, limit=ruled.limit, unsupported_reason=None,
+            )
+        explicit = {
+            "customer": _CUSTOMER_MENTION_RE.search(question) or _SELL_TO_RE.search(question),
+            "distributor": _DISTRIBUTOR_MENTION_RE.search(question),
+            "location": _LOCATION_MENTION_RE.search(question),
+        }
+        filters = spec.filters.model_dump()
+        changed = False
+        for key, hit in explicit.items():
+            value = getattr(ruled.filters, key)
+            if hit and value and filters.get(key) != value:
+                for other in filters:
+                    if other != key and filters[other] and filters[other].casefold() == value.casefold():
+                        filters[other] = None
+                filters[key] = value
+                changed = True
+        if changed:
+            update["filters"] = filters
+        if not update:
+            return spec
+        return QuerySpec.model_validate({**spec.model_dump(), **update})
 
     def _ground_periods(self, spec: QuerySpec, question: str, previous: Optional[QuerySpec]) -> QuerySpec:
         """Reject model-supplied periods whose year is not in the question or previous spec."""
