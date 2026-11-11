@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     auth,
     chat_data,
     consolidated_data,
+    customer_standardization,
     dashboard,
     distributors,
     erp,
@@ -45,3 +46,4 @@ api_router.include_router(chat_data.router)
 api_router.include_router(settings.router)
 api_router.include_router(normalization.router)
 api_router.include_router(product_standardization.router)
+api_router.include_router(customer_standardization.router)

@@ -49,6 +49,7 @@ class DuplicateMixin:
                 SalesRecord.quantity,
                 SalesRecord.location,
                 SalesRecord.segment,
+                SalesRecord.original_customer_name,
             )
             .join(Report, Report.id == SalesRecord.report_id)
             .where(
@@ -60,26 +61,32 @@ class DuplicateMixin:
         ).all()
         seen = {
             (
-                str(customer or "").strip().casefold(),
+                str(name or "").strip().casefold(),
                 str(product or "").strip().casefold(),
                 self._business_qty(qty),
                 str(loc or "").strip().casefold(),
                 str(seg or "").strip().casefold(),
             )
-            for customer, product, qty, loc, seg in existing
+            for customer, product, qty, loc, seg, original_customer in existing
+            # Raw and standardized customer names both identify an existing row.
+            for name in {customer, original_customer or customer}
         }
         fresh: List[ParsedSalesRow] = []
         for row in rows:
-            key = (
-                row.customer_name.strip().casefold(),
+            rest = (
                 row.product.strip().casefold(),
                 self._business_qty(row.quantity),
                 (row.location or "").strip().casefold(),
                 (row.segment or "").strip().casefold(),
             )
-            if key in seen:
+            names = {
+                n.strip().casefold()
+                for n in (row.customer_name, getattr(row, "original_customer_name", None) or row.customer_name)
+            }
+            keys = {(name, *rest) for name in names}
+            if keys & seen:
                 continue
-            seen.add(key)
+            seen |= keys
             fresh.append(row)
         return fresh
 

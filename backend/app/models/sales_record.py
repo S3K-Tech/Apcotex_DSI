@@ -56,6 +56,12 @@ class SalesRecord(Base, TimestampMixin, SoftDeleteMixin):
         String(20), nullable=True
     )
     product_mapping_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Customer standardization (NULL on rows imported before the feature existed).
+    original_customer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    customer_standardization_status: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )
+    customer_mapping_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     report_id: Mapped[int] = mapped_column(
         ForeignKey("reports.id", ondelete="CASCADE"),

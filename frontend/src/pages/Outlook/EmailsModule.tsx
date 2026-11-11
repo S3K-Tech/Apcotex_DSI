@@ -6,10 +6,12 @@ import {
   ArrowRight,
   Trash2,
   X,
-  Eye,
+  Package,
   Info as InfoIcon,
+  UserRound,
 } from 'lucide-react';
 import { useNavigate } from 'react-router';
+import { CustomerWorkbenchModal } from './CustomerWorkbenchModal';
 import { ProductWorkbenchModal } from './ProductWorkbenchModal';
 import { StandardizedDataModal } from './StandardizedDataModal';
 import { BLUE, BORDER, RED, TEAL } from '../../constants/theme';
@@ -191,7 +193,8 @@ export function EmailsModule() {
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null);
   const [standardization, setStandardization] = useState<{
     email: EmailRecord;
-    mode: 'workbench' | 'data';
+    mode: 'workbench' | 'customer' | 'data';
+    attachmentId?: number | null;
   } | null>(null);
   const [consolidateOpen, setConsolidateOpen] = useState(false);
   const [consolidateBusy, setConsolidateBusy] = useState(false);
@@ -952,7 +955,19 @@ export function EmailsModule() {
                                 setStandardization({ email, mode: 'workbench' });
                               }}
                             >
-                              <Eye size={15} />
+                              <Package size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Customer Standardization Workbench"
+                              aria-label="Open Customer Standardization Workbench"
+                              style={iconBtn}
+                              onClick={event => {
+                                event.stopPropagation();
+                                setStandardization({ email, mode: 'customer' });
+                              }}
+                            >
+                              <UserRound size={15} />
                             </button>
                             <button
                               type="button"
@@ -1395,7 +1410,18 @@ export function EmailsModule() {
         <ProductWorkbenchModal
           emailId={standardization.email.id}
           title={standardization.email.subject}
+          initialAttachmentId={standardization.attachmentId}
           onClose={() => setStandardization(null)}
+          onSwitchToCustomers={attachmentId => setStandardization(s => (s ? { ...s, mode: 'customer', attachmentId } : s))}
+        />
+      )}
+      {standardization?.mode === 'customer' && (
+        <CustomerWorkbenchModal
+          emailId={standardization.email.id}
+          title={standardization.email.subject}
+          initialAttachmentId={standardization.attachmentId}
+          onClose={() => setStandardization(null)}
+          onSwitchToProducts={attachmentId => setStandardization(s => (s ? { ...s, mode: 'workbench', attachmentId } : s))}
         />
       )}
       {standardization?.mode === 'data' && (

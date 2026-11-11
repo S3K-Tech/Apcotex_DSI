@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Check, Loader2, Pencil, RefreshCw, X } from 'lucide-react';
+import { Check, Loader2, Package, Pencil, RefreshCw, UserRound, X } from 'lucide-react';
 import { ApiError } from '../../api';
 import { StatusBanner } from '../../components/common/StatusBanner';
 import { BLUE, BORDER, GREEN, RED, TEAL } from '../../constants/theme';
@@ -10,7 +10,13 @@ import {
   type WorkbenchItem,
 } from '../../services/productStandardization.service';
 
-type Props = { emailId: number; title: string; onClose: () => void };
+type Props = {
+  emailId: number;
+  title: string;
+  onClose: () => void;
+  initialAttachmentId?: number | null;
+  onSwitchToCustomers?: (attachmentId: number | null) => void;
+};
 
 type Filter = 'all' | WorkbenchItem['bucket'];
 
@@ -197,9 +203,9 @@ function MasterAutocomplete({
   );
 }
 
-export function ProductWorkbenchModal({ emailId, title, onClose }: Props) {
+export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachmentId = null, onSwitchToCustomers }: Props) {
   const [data, setData] = useState<WorkbenchData | null>(null);
-  const [attachmentId, setAttachmentId] = useState<number | null>(null);
+  const [attachmentId, setAttachmentId] = useState<number | null>(initialAttachmentId);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -302,6 +308,28 @@ export function ProductWorkbenchModal({ emailId, title, onClose }: Props) {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {onSwitchToCustomers && (
+              <div style={{ display: 'inline-flex', gap: 4 }} role="tablist" aria-label="Standardization workbench">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected
+                  style={{ ...smallBtn('white'), color: BLUE, border: `1px solid ${BLUE}`, background: 'rgba(31,95,168,0.08)', cursor: 'default' }}
+                >
+                  <Package size={13} /> Products
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={false}
+                  disabled={busy}
+                  style={{ ...smallBtn('white'), color: '#374151', border: `1px solid ${BORDER}` }}
+                  onClick={() => onSwitchToCustomers(data?.attachment_id ?? attachmentId)}
+                >
+                  <UserRound size={13} /> Customers
+                </button>
+              </div>
+            )}
             {data && data.attachments.length > 1 && (
               <select
                 value={attachmentId ?? data.attachment_id}

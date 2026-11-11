@@ -338,3 +338,6 @@ class ParsedSalesRow(BaseModel):
     original_product_name: Optional[str] = None
     product_standardization_status: Optional[str] = None
     product_mapping_id: Optional[int] = None
+    original_customer_name: Optional[str] = None
+    customer_standardization_status: Optional[str] = None
+    customer_mapping_id: Optional[int] = None

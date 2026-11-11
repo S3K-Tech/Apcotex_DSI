@@ -699,6 +699,19 @@ class ImportMixin:
             standardization["master_configured"],
         )
 
+        from app.services.customer_standardization.apply import apply_customer_standardization
+
+        customer_std = apply_customer_standardization(
+            self.db, merged_rows, distributor_id=resolved_id
+        )
+        logger.info(
+            "Customer standardization | email_id={} | auto={} | review={} | unmapped={}",
+            email_id,
+            customer_std["auto_matched"],
+            customer_std["needs_review"],
+            customer_std["unmapped"],
+        )
+
         try:
             saved = self._persist_preview_rows(
                 email=email,

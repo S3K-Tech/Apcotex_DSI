@@ -33,6 +33,9 @@ class SalesRecordMapper:
             original_product_name=getattr(row, "original_product_name", None),
             product_standardization_status=getattr(row, "product_standardization_status", None),
             product_mapping_id=getattr(row, "product_mapping_id", None),
+            original_customer_name=getattr(row, "original_customer_name", None),
+            customer_standardization_status=getattr(row, "customer_standardization_status", None),
+            customer_mapping_id=getattr(row, "customer_mapping_id", None),
             report_id=report_id,
             distributor_id=distributor_id,
         )

@@ -142,6 +142,18 @@ def _identity_product(row: Mapping[str, Any]) -> str:
     return str(row.get("original_product_name") or row.get("product") or "")
 
 
+def _identity_customers(row: Mapping[str, Any]) -> List[str]:
+    # Distributor's own customer text first, then the stored (possibly
+    # standardized) name, so rows imported before and after customer
+    # standardization still identify the same business row.
+    names: List[str] = []
+    for value in (row.get("original_customer_name"), row.get("customer_name") or row.get("customer")):
+        text = str(value or "").strip()
+        if text and text.casefold() not in {n.casefold() for n in names}:
+            names.append(text)
+    return names or [""]
+
+
 def load_existing(
     db: Session,
     distributor_id: int,
@@ -174,16 +186,18 @@ def load_existing(
             SalesRecord.location,
             SalesRecord.segment,
             SalesRecord.original_product_name,
+            SalesRecord.original_customer_name,
         )
         .join(Report, Report.id == SalesRecord.report_id)
         .where(*filters)
     ).all()
     loaded: List[Dict[str, Any]] = []
-    for record_id, customer, product, quantity, source_month, period, loc, seg, original in rows:
+    for record_id, customer, product, quantity, source_month, period, loc, seg, original, original_customer in rows:
         loaded.append(
             {
                 "id": int(record_id),
                 "customer_name": customer or "",
+                "original_customer_name": original_customer or "",
                 "product": product or "",
                 "original_product_name": original or "",
                 "quantity": quantity,
@@ -209,17 +223,18 @@ def analyse_rows(
     index: Dict[tuple, Dict[str, Any]] = {}
     for row in existing:
         period = str(row.get("period") or "")
-        key = _identity(
-            str(row.get("customer_name") or ""),
-            _identity_product(row),
-            _when_key(row, period),
-            financial_year_of(period),
-            str(row.get("location") or scope_location),
-            str(row.get("segment") or scope_segment),
-        )
-        current = index.get(key)
-        if current is None or int(row.get("id") or 0) >= int(current.get("id") or 0):
-            index[key] = dict(row)
+        for name in _identity_customers(row):
+            key = _identity(
+                name,
+                _identity_product(row),
+                _when_key(row, period),
+                financial_year_of(period),
+                str(row.get("location") or scope_location),
+                str(row.get("segment") or scope_segment),
+            )
+            current = index.get(key)
+            if current is None or int(row.get("id") or 0) >= int(current.get("id") or 0):
+                index[key] = dict(row)
 
     classified: List[Dict[str, Any]] = []
     modified_rows: List[Dict[str, Any]] = []
@@ -233,15 +248,20 @@ def analyse_rows(
         incoming_qty = _qty(
             row.get("sales_quantity") if row.get("sales_quantity") is not None else row.get("quantity")
         )
-        key = _identity(
-            customer,
-            _identity_product(row),
-            when,
-            financial_year_of(period),
-            row_location,
-            row_segment,
-        )
-        found = index.get(key)
+        found = None
+        for name in _identity_customers(row):
+            found = index.get(
+                _identity(
+                    name,
+                    _identity_product(row),
+                    when,
+                    financial_year_of(period),
+                    row_location,
+                    row_segment,
+                )
+            )
+            if found is not None:
+                break
         if found is None:
             kind = NEW
             existing_qty = None

@@ -195,6 +195,13 @@ class ValidationMixin:
                         str(raw.get("product_standardization_status") or "").strip() or None
                     ),
                     product_mapping_id=raw.get("product_mapping_id"),
+                    original_customer_name=(
+                        str(raw.get("original_customer_name") or "").strip()[:255] or None
+                    ),
+                    customer_standardization_status=(
+                        str(raw.get("customer_standardization_status") or "").strip() or None
+                    ),
+                    customer_mapping_id=raw.get("customer_mapping_id"),
                 )
             )
         return by_period
