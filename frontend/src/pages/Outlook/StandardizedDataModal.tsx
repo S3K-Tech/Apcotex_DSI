@@ -182,7 +182,7 @@ export function StandardizedDataModal({ emailId, title, onClose }: Props) {
                     <tr>
                       <th style={{ ...cell, fontWeight: 600 }}>#</th>
                       {data.columns.map(c => (
-                        <th key={c} style={{ ...cell, fontWeight: 600, color: '#374151' }}>{label(c)}</th>
+                        <th key={c} style={{ ...cell, fontWeight: 600, color: '#374151' }}>{data.column_labels?.[c] || label(c)}</th>
                       ))}
                     </tr>
                   </thead>

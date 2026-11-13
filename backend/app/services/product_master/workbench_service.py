@@ -27,12 +27,51 @@ from app.services.product_master.matching import (
     ProductMatcher,
 )
 from app.services.product_master.normalize import clean_display
+from app.services.product_master.source_table import build_source_table
 
 logger = get_logger(__name__)
 
 MAX_SNAPSHOT_ROWS = 20_000
 MAX_PAGE_SIZE = 200
 _HIDDEN_KEYS = {"row_hash", "human_review", "errors"}
+# The parser repeats one row quantity under these alias keys; show it once.
+_QUANTITY_ALIASES = ("quantity", "sales_qty", "qty")
+
+
+def _row_quantity(row: Dict[str, Any]) -> Any:
+    """The row's extracted sales quantity as stored, unchanged."""
+    for key in ("sales_quantity", "sales_qty", "quantity", "qty"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _display_columns(columns: List[str]) -> List[str]:
+    if "sales_quantity" not in columns:
+        return list(columns)
+    return [c for c in columns if c not in _QUANTITY_ALIASES]
+
+
+def _source(snap: ProductStandardizationSnapshot) -> Optional[Dict[str, Any]]:
+    table = snap.source_table or {}
+    return table if table.get("available") and table.get("columns") else None
+
+
+def approved_customer_names(db: Session, raw_names: List[str], distributor_id: Optional[int]) -> Dict[str, str]:
+    """Raw customer -> latest approved standardized customer (distributor mapping, then global)."""
+    from app.services.customer_standardization.matching import CustomerMatcher
+
+    out: Dict[str, str] = {}
+    names = {n for n in raw_names if n}
+    if not names:
+        return out
+    matcher = CustomerMatcher.load(db)
+    for raw in names:
+        result = matcher.match(raw, distributor_id)
+        if result.approved and result.suggested:
+            out[raw] = result.suggested
+    return out
 
 
 def _json_safe(value: Any) -> Any:
@@ -145,6 +184,7 @@ class ProductWorkbenchService:
             raise ValidationAppError(
                 "This attachment could not be extracted. Open the email Preview to review the parser result."
             ) from exc
+        self._last_preview = one
         rows = [r for r in (one.get("rows") or []) if isinstance(r, dict)]
         if subject_period or subject_meta.get("allowed_quarters"):
             handled, _notes = assign_row_periods(rows, subject_meta)
@@ -163,10 +203,15 @@ class ProductWorkbenchService:
                 ProductStandardizationSnapshot.attachment_id == att.id,
             )
         )
-        fresh = snap is not None and (snap.content_hash or "") == (att.content_hash or "")
+        fresh = (
+            snap is not None
+            and (snap.content_hash or "") == (att.content_hash or "")
+            and snap.source_table is not None
+        )
         if fresh and not refresh:
             return snap
 
+        self._last_preview = None
         rows, parser_used = self._parse_attachment(email, att)
         if len(rows) > MAX_SNAPSHOT_ROWS:
             rows = rows[:MAX_SNAPSHOT_ROWS]
@@ -187,6 +232,11 @@ class ProductWorkbenchService:
         snap.row_count = len(safe_rows)
         snap.columns = list(columns.keys())
         snap.rows = safe_rows
+        snap.source_table = build_source_table(
+            Path(att.file_path or ""),
+            getattr(self, "_last_preview", None),
+            (clean_display(r.get("product")) for r in safe_rows),
+        )
         self.db.flush()
         return snap
 
@@ -247,7 +297,51 @@ class ProductWorkbenchService:
             items.append(item)
         order = {"awaiting_review": 0, "unmapped": 1, "auto_standardized": 2, "approved": 3}
         items.sort(key=lambda i: (order.get(i["bucket"], 9), i["raw_product"].casefold()))
-        return {**ctx, "metrics": metrics, "items": items}
+        return {**ctx, "metrics": metrics, "items": items, "table": self._row_table(snap, distributor_id)}
+
+    def _row_table(self, snap: ProductStandardizationSnapshot, distributor_id: Optional[int]) -> Dict[str, Any]:
+        """
+        One entry per extracted sales row, in original worksheet order.
+
+        Customer, product and quantity come from the same extracted row.
+        ``source_row`` is the row's position in the original sheet (matched on
+        product + customer), falling back to extraction order. ``raw_product``
+        links a row to its product-level item (one decision per distinct product);
+        ``customer_display`` is the latest approved customer standardization and
+        ``customer_raw`` stays as extracted.
+        """
+        positions: Dict[Tuple[str, str], List[int]] = {}
+        source = _source(snap)
+        if source is not None:
+            for idx, r in enumerate(source["rows"]):
+                key = ((r.get("product") or "").casefold(), (r.get("customer") or "").casefold())
+                positions.setdefault(key, []).append(idx)
+
+        base: List[Dict[str, Any]] = []
+        for order, row in enumerate(snap.rows or []):
+            product = clean_display(row.get("product"))
+            customer = clean_display(row.get("customer_name") or row.get("customer"))
+            hits = positions.get((product.casefold(), customer.casefold())) or []
+            base.append(
+                {
+                    "source_row": hits[0] if hits else None,
+                    "order": order,
+                    "raw_product": product,
+                    "customer_raw": customer,
+                    "quantity": _row_quantity(row),
+                }
+            )
+        if source is not None and all(b["source_row"] is not None for b in base):
+            base.sort(key=lambda b: (b["source_row"], b["order"]))
+        for idx, b in enumerate(base):
+            b["source_row"] = idx + 1
+            del b["order"]
+
+        approved = approved_customer_names(self.db, [b["customer_raw"] for b in base], distributor_id)
+        for b in base:
+            b["customer_display"] = approved.get(b["customer_raw"], b["customer_raw"])
+            b["customer_standardized"] = b["customer_raw"] in approved
+        return {"rows": base}
 
     # ---------------------------------------------------------- full preview
     def full_preview(
@@ -266,28 +360,42 @@ class ProductWorkbenchService:
         ctx = self._context(email, snap, matcher)
         distributor_id = ctx["distributor"]["id"] if ctx["distributor"] else None
 
+        # Source rows exactly as in the attachment (no summing, one quantity per
+        # cell); the extracted parser rows are only the fallback.
+        source = _source(snap)
+        if source is not None:
+            original_columns = [c["key"] for c in source["columns"]]
+            labels = {c["key"]: c["label"] for c in source["columns"]}
+            base_rows = [(dict(r["cells"]), r.get("product") or "") for r in source["rows"]]
+        else:
+            original_columns = _display_columns(list(snap.columns or []))
+            labels = {}
+            base_rows = [
+                ({k: row.get(k) for k in original_columns}, clean_display(row.get("product")))
+                for row in snap.rows or []
+            ]
+
         cache: Dict[str, MatchResult] = {}
         enriched: List[Dict[str, Any]] = []
         wanted = (status or "").strip().upper() or None
         needle = clean_display(search).casefold() if search else ""
-        for row in snap.rows or []:
-            raw = clean_display(row.get("product"))
+        for cells, raw in base_rows:
             result = cache.get(raw)
             if result is None:
                 result = matcher.match(raw, distributor_id) if raw else MatchResult(
                     raw="", key="", status=UNMAPPED, method="NONE"
                 )
                 cache[raw] = result
-            if wanted and result.status != wanted:
+            if wanted and (not raw or result.status != wanted):
                 continue
-            out = {k: row.get(k) for k in snap.columns}
+            out = dict(cells)
             out["original_product"] = raw
             # Only approved or exact master values count as standardized; a
             # similarity suggestion is shown separately and never as approved.
-            out["standardized_product"] = result.suggested if result.status == AUTO_MATCHED else None
-            out["suggested_product"] = result.suggested if result.status == NEEDS_REVIEW else None
-            out["standardization_status"] = result.status
-            out["standardization_source"] = _METHOD_LABEL.get(result.method, "")
+            out["standardized_product"] = result.suggested if raw and result.status == AUTO_MATCHED else None
+            out["suggested_product"] = result.suggested if raw and result.status == NEEDS_REVIEW else None
+            out["standardization_status"] = result.status if raw else None
+            out["standardization_source"] = _METHOD_LABEL.get(result.method, "") if raw else ""
             if needle and not any(needle in str(v).casefold() for v in out.values() if v is not None):
                 continue
             enriched.append(out)
@@ -297,11 +405,12 @@ class ProductWorkbenchService:
         pages = max(1, (total + page_size - 1) // page_size)
         page = max(1, min(int(page or 1), pages))
         start = (page - 1) * page_size
-        columns = [c for c in snap.columns if c != "product"]
         return {
             **ctx,
-            "columns": ["original_product", "standardized_product", "standardization_status", *columns,
+            "source": "excel" if source is not None else "extracted",
+            "columns": [*original_columns, "standardized_product", "standardization_status",
                         "suggested_product", "standardization_source"],
+            "column_labels": labels,
             "rows": enriched[start:start + page_size],
             "page": page,
             "page_size": page_size,

@@ -38,3 +38,6 @@ class ProductStandardizationSnapshot(Base, TimestampMixin):
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     columns: Mapped[Any] = mapped_column(JSONB, nullable=False, default=list)
     rows: Mapped[Any] = mapped_column(JSONB, nullable=False, default=list)
+    # Original worksheet header + rows in source order (see product_master.source_table).
+    # NULL = snapshot built before this existed; {"available": false} = not readable.
+    source_table: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)

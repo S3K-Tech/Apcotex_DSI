@@ -87,6 +87,19 @@ export type WorkbenchContext = {
   row_count: number;
 };
 
+export type WorkbenchRow = {
+  source_row: number;
+  raw_product: string;
+  customer_raw: string;
+  customer_display: string;
+  customer_standardized: boolean;
+  quantity: number | string | null;
+};
+
+export type WorkbenchTable = {
+  rows: WorkbenchRow[];
+};
+
 export type WorkbenchData = WorkbenchContext & {
   metrics: {
     total_distinct: number;
@@ -96,10 +109,13 @@ export type WorkbenchData = WorkbenchContext & {
     approved: number;
   };
   items: WorkbenchItem[];
+  table: WorkbenchTable;
 };
 
 export type StandardizedPreview = WorkbenchContext & {
+  source: 'excel' | 'extracted';
   columns: string[];
+  column_labels: Record<string, string>;
   rows: Record<string, unknown>[];
   page: number;
   page_size: number;

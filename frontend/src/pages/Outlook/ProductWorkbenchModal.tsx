@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { Check, Loader2, Package, Pencil, RefreshCw, UserRound, X } from 'lucide-react';
 import { ApiError } from '../../api';
 import { StatusBanner } from '../../components/common/StatusBanner';
+import { Pagination } from '../../components/ui/Pagination';
 import { BLUE, BORDER, GREEN, RED, TEAL } from '../../constants/theme';
 import {
   ProductStandardizationService,
@@ -9,6 +10,13 @@ import {
   type WorkbenchData,
   type WorkbenchItem,
 } from '../../services/productStandardization.service';
+
+const PAGE_SIZE = 100;
+
+function cellText(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  return String(value);
+}
 
 type Props = {
   emailId: number;
@@ -214,6 +222,7 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
   const [editing, setEditing] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState<Filter>('all');
+  const [page, setPage] = useState(1);
 
   const load = useCallback(
     async (refresh = false) => {
@@ -243,11 +252,40 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
     void load();
   }, [load]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [filter, attachmentId]);
+
   const canApprove = Boolean(data?.distributor);
-  const visible = useMemo(
-    () => (data?.items || []).filter(i => filter === 'all' || i.bucket === filter),
-    [data, filter]
+  const itemsByRaw = useMemo(() => {
+    const map = new Map<string, WorkbenchItem>();
+    (data?.items || []).forEach(i => map.set(i.raw_product, i));
+    return map;
+  }, [data]);
+  // One table row per source row, in source order; filters use the row's product status.
+  const visibleRows = useMemo(
+    () =>
+      (data?.table?.rows || []).filter(r => {
+        if (filter === 'all') return true;
+        const item = itemsByRaw.get(r.raw_product);
+        return item !== undefined && item.bucket === filter;
+      }),
+    [data, filter, itemsByRaw]
   );
+  const visible = useMemo(() => {
+    const seen = new Set<string>();
+    const out: WorkbenchItem[] = [];
+    visibleRows.forEach(r => {
+      const item = itemsByRaw.get(r.raw_product);
+      if (item && !seen.has(item.raw_product)) {
+        seen.add(item.raw_product);
+        out.push(item);
+      }
+    });
+    return out;
+  }, [visibleRows, itemsByRaw]);
+  const pages = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+  const pageRows = visibleRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const selectable = (i: WorkbenchItem) => canApprove && (!isLocked(i) || editing[i.raw_product]);
   const selectedItems = visible.filter(i => selected[i.raw_product] && selectable(i));
   const allSelectable = visible.filter(selectable);
@@ -434,25 +472,48 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
                           }}
                         />
                       </th>
-                      {['Distributor', 'Raw Product Entry', 'Suggested Master Product', 'Confidence', 'Workflow Status', 'Action'].map(h => (
-                        <th key={h} style={{ ...cell, fontWeight: 600, color: '#374151' }}>{h}</th>
+                      {['Customer', 'Raw Product Entry', 'Sales Quantity', 'Suggested Master Product', 'Confidence', 'Workflow Status', 'Action'].map(h => (
+                        <th key={h} style={{ ...cell, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {visible.length === 0 ? (
+                    {pageRows.length === 0 ? (
                       <tr>
-                        <td colSpan={7} style={{ ...cell, textAlign: 'center', color: '#6B7280', padding: '24px 10px' }}>
+                        <td colSpan={8} style={{ ...cell, textAlign: 'center', color: '#6B7280', padding: '24px 10px' }}>
                           No products in this view.
                         </td>
                       </tr>
                     ) : (
-                      visible.map(item => {
+                      pageRows.map(row => {
+                        const item = itemsByRaw.get(row.raw_product);
+                        const originalCells = (
+                          <>
+                            <td style={cell}>
+                              <span style={{ whiteSpace: 'pre-wrap' }}>{row.customer_display || '—'}</span>
+                              {row.customer_standardized && (
+                                <div style={{ fontSize: '0.6875rem', color: '#6B7280' }}>Original: {row.customer_raw}</div>
+                              )}
+                            </td>
+                            <td style={{ ...cell, fontWeight: 600, whiteSpace: 'pre-wrap' }}>{row.raw_product || '—'}</td>
+                            <td style={{ ...cell, textAlign: 'right' }}>{cellText(row.quantity)}</td>
+                          </>
+                        );
+                        const rowKey = String(row.source_row);
+                        if (!item) {
+                          return (
+                            <tr key={rowKey}>
+                              <td style={cell} />
+                              {originalCells}
+                              <td colSpan={4} style={{ ...cell, color: '#9CA3AF' }}>—</td>
+                            </tr>
+                          );
+                        }
                         const locked = isLocked(item) && !editing[item.raw_product];
                         const st = STATUS_STYLE[item.bucket];
                         const value = values[item.raw_product] || '';
                         return (
-                          <tr key={item.raw_product}>
+                          <tr key={rowKey}>
                             <td style={cell}>
                               <input
                                 type="checkbox"
@@ -462,11 +523,7 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
                                 onChange={e => setSelected(s => ({ ...s, [item.raw_product]: e.target.checked }))}
                               />
                             </td>
-                            <td style={cell}>{item.distributor || '—'}</td>
-                            <td style={{ ...cell, fontWeight: 600 }}>
-                              {item.raw_product}
-                              <div style={{ fontSize: '0.6875rem', color: '#6B7280', fontWeight: 400 }}>{item.row_count} row(s)</div>
-                            </td>
+                            {originalCells}
                             <td style={cell}>
                               {locked ? (
                                 <div>
@@ -518,7 +575,20 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
                   </tbody>
                 </table>
               </div>
+              {visibleRows.length > PAGE_SIZE && (
+                <Pagination
+                  currentPage={page}
+                  totalPages={pages}
+                  totalRecords={visibleRows.length}
+                  firstRecord={(page - 1) * PAGE_SIZE + 1}
+                  lastRecord={Math.min(page * PAGE_SIZE, visibleRows.length)}
+                  entity="rows"
+                  disabled={busy}
+                  onPageChange={setPage}
+                />
+              )}
               <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>
+                Repeated products share one decision: approving a product applies to every row where it appears.{' '}
                 Approvals are saved for this distributor and, when no global mapping exists, learned globally. An existing global
                 mapping is never overwritten. Approvals affect future imports only; already-imported sales data is not changed.
               </div>
