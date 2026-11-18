@@ -133,7 +133,7 @@ class ChatQueryService:
         )
         q = q.where(_not_report_footer())
         if rf.location:
-            q = q.where(_location_key() == rf.location.strip().lower())
+            q = q.where(_effective_location_key() == rf.location.strip().lower())
         if apply_customer and rf.customer_key:
             q = q.where(_customer_identity_expr() == rf.customer_key)
         return q
@@ -229,9 +229,10 @@ class ChatQueryService:
                 for r in self.db.execute(q).all()
             ]
         elif dimension == QueryDimension.LOCATION:
-            loc_key = _location_key()
+            loc_key = _effective_location_key()
+            loc_display = _effective_location_display()
             q = self.scoped(
-                select(loc_key.label("k"), func.min(SalesRecord.location).label("name"), mt.label("mt")),
+                select(loc_key.label("k"), func.min(loc_display).label("name"), mt.label("mt")),
                 rf,
                 period,
             ).where(loc_key != "").group_by(loc_key)
@@ -426,8 +427,22 @@ class ChatQueryService:
         return sorted(years, reverse=True)
 
 
+def _effective_location_display():
+    """Prefer row location; fall back to distributor region (same as analytics filters)."""
+    return func.coalesce(
+        func.nullif(func.trim(SalesRecord.location), ""),
+        func.nullif(func.trim(Distributor.region), ""),
+        "",
+    )
+
+
+def _effective_location_key():
+    return func.lower(func.trim(_effective_location_display()))
+
+
 def _location_key():
-    return func.lower(func.trim(func.coalesce(SalesRecord.location, "")))
+    """Backward-compatible alias used by entity resolution helpers."""
+    return _effective_location_key()
 
 
 def _not_report_footer():

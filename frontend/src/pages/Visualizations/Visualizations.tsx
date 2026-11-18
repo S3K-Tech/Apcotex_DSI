@@ -33,6 +33,9 @@ import {
   type EnterpriseFilterState,
 } from '../../utils/analyticsFilters';
 import { formatPeriodDisplay } from '../../utils/quarter';
+import { reportFiltersFrom } from '../../services/executiveReport.service';
+import { ExecutiveReportToolbar, ExecutiveSummarySection, useExecutiveReport } from './ExecutiveReport';
+import { EmailReportDialog } from './EmailReportDialog';
 
 function formatMt(value: number): string {
   const amount = Number(value);
@@ -84,8 +87,10 @@ export function Visualizations() {
   const requestSeq = useRef(0);
 
   useEffect(() => {
+    let cancelled = false;
     VisualizationsService.getFilterOptions()
       .then(opts => {
+        if (cancelled) return;
         setFilterOptions({
           distributors: opts.distributors || [],
           customers: opts.customers || [],
@@ -95,10 +100,20 @@ export function Visualizations() {
           financial_years: opts.financial_years,
         });
       })
-      .catch(() => undefined);
+      .catch(err => {
+        if (!cancelled) {
+          setError(err instanceof ApiError ? err.message : 'Could not load filter options from the database.');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const queryBase = useMemo(() => toAnalyticsQuery(filters), [filters]);
+  const reportFilters = useMemo(() => reportFiltersFrom(queryBase), [queryBase]);
+  const executive = useExecutiveReport(reportFilters);
+  const [emailOpen, setEmailOpen] = useState(false);
 
   const runView = useCallback(
     async (nextPage = 1, searchOverride?: string) => {
@@ -194,14 +209,37 @@ export function Visualizations() {
 
   return (
     <div style={{ padding: '24px 28px', maxWidth: 1280 }}>
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#0F172A' }}>
-          Visualizations & Analytics
-        </h1>
-        <p style={{ margin: '6px 0 0', fontSize: '0.875rem', color: '#64748B' }}>
-          Interactive sales analytics powered by structured distributor secondary sales data.
-        </p>
+      <div
+        style={{
+          marginBottom: 20,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: 16,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div>
+          <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#0F172A' }}>
+            Visualizations & Analytics
+          </h1>
+          <p style={{ margin: '6px 0 0', fontSize: '0.875rem', color: '#64748B' }}>
+            Interactive sales analytics powered by structured distributor secondary sales data.
+          </p>
+        </div>
+        <ExecutiveReportToolbar
+          state={executive}
+          canGenerate={loaded && !!data && !loading && !validateEnterpriseFilters(filters)}
+          onSendEmail={() => setEmailOpen(true)}
+        />
       </div>
+      {emailOpen && executive.report && !executive.stale && (
+        <EmailReportDialog
+          report={executive.report}
+          filters={executive.currentFilters}
+          onClose={() => setEmailOpen(false)}
+        />
+      )}
 
       {error && <StatusBanner message={error} type="error" style={{ marginBottom: 16 }} />}
 
@@ -209,7 +247,7 @@ export function Visualizations() {
         title="Sales Insight Filters"
         actionLabel="View"
         loading={loading}
-        showCustomer={false}
+        showCustomer={true}
         value={filters}
         options={filterOptions}
         onChange={patch => setFilters(prev => ({ ...prev, ...patch }))}
@@ -404,6 +442,8 @@ export function Visualizations() {
               </div>
             </ChartCard>
           </div>
+
+          <ExecutiveSummarySection state={executive} />
 
           <div
             style={{

@@ -6,8 +6,10 @@ Priority (first hit wins):
 2. approved global mapping
 3. exact legal-form-aware key match with the customer master, an approved
    standardized name, or a customer name already present in sales data
-4. conservative similarity suggestion (NEEDS_REVIEW, never applied automatically)
-5. unmapped
+4. high-confidence unambiguous fuzzy match against an approved mapping original
+   (AUTO_MATCHED — applies only that approved mapping; never invents a merge)
+5. conservative similarity suggestion against master/sales names (NEEDS_REVIEW)
+6. unmapped
 
 Similarity is only strong when every distinctive word (not a generic business
 word such as RUBBER or INDUSTRIES and not a legal word) of both names has a
@@ -227,6 +229,9 @@ class CustomerMatcher:
     ) -> None:
         self._global: Dict[str, List[CustomerAliasMapping]] = defaultdict(list)
         self._dist: Dict[Tuple[int, str], List[CustomerAliasMapping]] = defaultdict(list)
+        # Compact key → approved mapping rows (for typo recognition against originals)
+        self._mapping_by_compact: Dict[str, List[CustomerAliasMapping]] = defaultdict(list)
+        self._mapping_tokens: Dict[str, List[str]] = {}
         self._refs: Dict[str, _Reference] = {}
         self._blocks: Dict[Tuple[str, str], Set[str]] = defaultdict(set)
 
@@ -239,6 +244,9 @@ class CustomerMatcher:
                 self._global[key].append(m)
             else:
                 self._dist[(int(m.distributor_id), key)].append(m)
+            compact = "".join(key_tokens(m.original_customer_name)) or key
+            self._mapping_by_compact[compact].append(m)
+            self._mapping_tokens[compact] = key_tokens(m.original_customer_name) or key_tokens(key)
 
         for name in master_names:
             self._add_reference(name, SOURCE_MASTER, 0)
@@ -363,6 +371,93 @@ class CustomerMatcher:
         scored.sort(key=lambda item: (-item[0], _SOURCE_RANK[item[2]], item[1].casefold()))
         return [{"name": d, "confidence": s, "source": src} for s, d, src in scored[:limit]]
 
+    def _fuzzy_approved_mapping(
+        self, raw: str, spaced: str, tokens: List[str], key: str, distributor_id: Optional[int]
+    ) -> Optional[CustomerMatch]:
+        """Typo recognition against approved mapping originals only.
+
+        High-confidence unambiguous hits auto-apply that approved mapping.
+        Medium / ambiguous hits stay NEEDS_REVIEW. Never invents a new merge.
+        """
+        scored: List[Tuple[float, CustomerAliasMapping, str]] = []
+        for compact, mappings in self._mapping_by_compact.items():
+            if distributor_id is not None:
+                preferred = [m for m in mappings if m.distributor_id == int(distributor_id)]
+                if not preferred:
+                    preferred = [m for m in mappings if m.distributor_id is None]
+                if not preferred:
+                    continue
+                candidates = preferred
+            else:
+                candidates = [m for m in mappings if m.distributor_id is None] or list(mappings)
+            score = similarity(tokens, self._mapping_tokens.get(compact, key_tokens(compact)))
+            if score < MEDIUM_CONFIDENCE:
+                continue
+            for m in candidates:
+                scored.append((score, m, "DISTRIBUTOR" if m.distributor_id is not None else "GLOBAL"))
+        if not scored:
+            return None
+        scored.sort(
+            key=lambda item: (
+                -item[0],
+                0 if item[2] == "DISTRIBUTOR" else 1,
+                item[1].standardized_customer_name.casefold(),
+            )
+        )
+        best_score, best_m, best_scope = scored[0]
+        # Collapse to unique standardized targets at the top score band
+        top = [s for s in scored if abs(s[0] - best_score) <= _AMBIGUITY_GAP]
+        standards = {
+            clean_display(m.standardized_customer_name).casefold(): (score, m, scope)
+            for score, m, scope in top
+        }
+        if len(standards) > 1:
+            alts = [
+                {"name": m.standardized_customer_name, "confidence": score, "source": SOURCE_APPROVED}
+                for score, m, _scope in standards.values()
+            ][:_MAX_ALTERNATIVES]
+            return CustomerMatch(
+                raw=raw,
+                key=spaced,
+                status=NEEDS_REVIEW,
+                method=METHOD_SIMILARITY_AMBIGUOUS,
+                suggested=best_m.standardized_customer_name,
+                suggested_source=SOURCE_APPROVED,
+                confidence=float(best_score),
+                alternatives=alts,
+            )
+        method = METHOD_DISTRIBUTOR_MAPPING if best_scope == "DISTRIBUTOR" else METHOD_GLOBAL_MAPPING
+        if best_score >= HIGH_CONFIDENCE:
+            return CustomerMatch(
+                raw=raw,
+                key=spaced,
+                status=AUTO_MATCHED,
+                method=method,
+                suggested=best_m.standardized_customer_name,
+                suggested_source=SOURCE_APPROVED,
+                confidence=float(best_score),
+                mapping_id=best_m.id,
+                mapping_scope=best_scope,
+            )
+        return CustomerMatch(
+            raw=raw,
+            key=spaced,
+            status=NEEDS_REVIEW,
+            method=METHOD_SIMILARITY_MEDIUM,
+            suggested=best_m.standardized_customer_name,
+            suggested_source=SOURCE_APPROVED,
+            confidence=float(best_score),
+            mapping_id=best_m.id,
+            mapping_scope=best_scope,
+            alternatives=[
+                {
+                    "name": best_m.standardized_customer_name,
+                    "confidence": best_score,
+                    "source": SOURCE_APPROVED,
+                }
+            ],
+        )
+
     def match(self, raw_value: object, distributor_id: Optional[int]) -> CustomerMatch:
         raw = clean_display(raw_value)
         tokens = key_tokens(raw)
@@ -398,6 +493,10 @@ class CustomerMatcher:
                 suggested=dominant, suggested_source=_source_name(best_rank), confidence=95.0,
                 alternatives=alts[:_MAX_ALTERNATIVES],
             )
+
+        mapping_hit = self._fuzzy_approved_mapping(raw, spaced, tokens, key, distributor_id)
+        if mapping_hit is not None:
+            return mapping_hit
 
         alts = self.suggest(raw)
         if alts and alts[0]["confidence"] >= MEDIUM_CONFIDENCE:

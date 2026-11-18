@@ -96,6 +96,7 @@ def complete(
     model_id: Optional[str] = None,
     timeout: Optional[float] = None,
     reason: str = "",
+    max_tokens: Optional[int] = None,
 ) -> BedrockCompletion:
     """Send one JSON-only chat completion. The prompt text is the caller's.
 
@@ -119,6 +120,7 @@ def complete(
             model_id=resolved_model,
             timeout=timeout,
             reason=reason,
+            max_tokens=max_tokens,
         )
     if timeout is not None:
         limit = float(timeout)
@@ -136,7 +138,7 @@ def complete(
                 modelId=resolved_model,
                 system=[{"text": system}],
                 messages=[{"role": "user", "content": [{"text": user}]}],
-                inferenceConfig={"temperature": 0.0, "maxTokens": 800},
+                inferenceConfig={"temperature": 0.0, "maxTokens": int(max_tokens or 800)},
             )
             text = _extract_final_text(response, model_id=resolved_model)
             usage = response.get("usage") if isinstance(response, dict) else {}

@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     dashboard,
     distributors,
     erp,
+    executive_reports,
     health,
     master_data,
     normalization,
@@ -42,6 +43,7 @@ api_router.include_router(audit.router)
 api_router.include_router(consolidated_data.router)
 api_router.include_router(visualizations.router)
 api_router.include_router(analytics.router)
+api_router.include_router(executive_reports.router)
 api_router.include_router(chat_data.router)
 api_router.include_router(settings.router)
 api_router.include_router(normalization.router)

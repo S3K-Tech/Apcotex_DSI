@@ -535,7 +535,7 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
                           }}
                         />
                       </th>
-                      {['Distributor', 'Raw Customer Name', 'Suggested Standardized Customer', 'Confidence', 'Status', 'Actions'].map(h => (
+                      {['Distributor', 'Raw Customer Name', 'Standardized Customer Name', 'Confidence', 'Status', 'Actions'].map(h => (
                         <th key={h} style={{ ...cell, fontWeight: 600, color: '#374151' }}>{h}</th>
                       ))}
                     </tr>

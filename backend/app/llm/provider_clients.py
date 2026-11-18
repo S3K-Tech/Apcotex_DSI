@@ -85,7 +85,9 @@ def _network_timeout(timeout: Optional[float]) -> float:
     return configured if configured >= 120 else _DEFAULT_NETWORK_TIMEOUT
 
 
-def _call_openai(api_key: str, *, system: str, user: str, model_id: str, timeout: float) -> _Reply:
+def _call_openai(
+    api_key: str, *, system: str, user: str, model_id: str, timeout: float, max_tokens: Optional[int] = None
+) -> _Reply:
     try:
         import openai
         from openai import OpenAI
@@ -101,7 +103,7 @@ def _call_openai(api_key: str, *, system: str, user: str, model_id: str, timeout
         response = client.chat.completions.create(
             model=model_id,
             messages=messages,
-            max_completion_tokens=get_settings().openai_max_output_tokens,
+            max_completion_tokens=max(int(max_tokens or 0), get_settings().openai_max_output_tokens),
         )
     except openai.AuthenticationError:
         raise LlmProviderError(
@@ -198,7 +200,9 @@ def _gemini_status_error(exc: Any, model_id: str) -> LlmProviderError:
     return LlmProviderError(f"Gemini rejected the request (HTTP {code} {status}).".strip())
 
 
-def _call_gemini(api_key: str, *, system: str, user: str, model_id: str, timeout: float) -> _Reply:
+def _call_gemini(
+    api_key: str, *, system: str, user: str, model_id: str, timeout: float, max_tokens: Optional[int] = None
+) -> _Reply:
     try:
         import httpx
         from google import genai
@@ -215,7 +219,7 @@ def _call_gemini(api_key: str, *, system: str, user: str, model_id: str, timeout
     config = types.GenerateContentConfig(
         system_instruction=system or None,
         temperature=0.0,
-        max_output_tokens=get_settings().gemini_max_output_tokens,
+        max_output_tokens=max(int(max_tokens or 0), get_settings().gemini_max_output_tokens),
     )
     try:
         response = client.models.generate_content(model=model_id, contents=user, config=config)
@@ -264,6 +268,7 @@ def complete_api(
     model_id: str,
     timeout: Optional[float] = None,
     reason: str = "",
+    max_tokens: Optional[int] = None,
 ) -> BedrockCompletion:
     """One completion on OpenAI or Gemini with the Bedrock retry policy."""
     if provider not in _CALLERS:
@@ -273,7 +278,9 @@ def complete_api(
     started = time.perf_counter()
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            reply = _CALLERS[provider](key, system=system, user=user, model_id=model_id, timeout=limit)
+            reply = _CALLERS[provider](
+                key, system=system, user=user, model_id=model_id, timeout=limit, max_tokens=max_tokens
+            )
             break
         except LlmProviderError as exc:
             if not exc.retryable or attempt >= _MAX_RETRIES:

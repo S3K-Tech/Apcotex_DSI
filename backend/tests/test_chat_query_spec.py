@@ -170,8 +170,27 @@ def test_distributor_mentions(question, distributor):
 def test_distributor_words_are_not_read_as_segment():
     f = RuleParser(RuleHints(distributor_names=_DISTRIBUTORS)).filters("South India Rubber top customers")
     assert f.distributor == "SOUTH INDIA RUBBER" and f.segment is None
+    assert f.location is None
     partial = RuleParser(RuleHints(distributor_names=_DISTRIBUTORS)).filters("south india top customers")
     assert partial.distributor == "south india" and partial.segment is None
+    assert partial.location is None
+
+
+@pytest.mark.parametrize(
+    "question, location",
+    [
+        ("Show all customers in India East for FY 2025-26", "India East"),
+        ("Give me sales for India West in FY 2025-26", "India West"),
+        ("Which distributors are selling in Export?", "Export"),
+        ("Show customers in India South for FY 2025-26", "India South"),
+        ("List customers of Chowdhry Rubber in India North", "India North"),
+        ("East customers in FY 2025-26", "India East"),
+        ("Show sales in the West region FY 2025-26", "India West"),
+    ],
+)
+def test_region_filters_from_natural_language(question, location):
+    f = RuleParser(RuleHints(distributor_names=_DISTRIBUTORS)).filters(question)
+    assert f.location == location
 
 
 def test_customer_mention_is_not_also_a_distributor():

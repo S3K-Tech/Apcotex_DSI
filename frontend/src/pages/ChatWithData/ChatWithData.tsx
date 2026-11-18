@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useEffect, type KeyboardEvent, type ReactNode } from 'react';
 import {
   AlertTriangle,
   HelpCircle,
@@ -10,25 +9,13 @@ import {
   SearchX,
   Send,
 } from 'lucide-react';
-import { ApiError } from '../../api/client';
 import { Pagination } from '../../components/ui/Pagination';
 import { BG, BLUE, BORDER, RED, TEAL, TEXT, TEXT_SECONDARY } from '../../constants/theme';
-import { chatWithDataService } from '../../services/chatWithData.service';
-import type {
-  ChatDataAnswer,
-  ChatDataAvailability,
-  ChatDataStatus,
-  ChatDataTable,
-  ChatDataTableColumn,
-  ChatQuerySpec,
-} from '../../types';
-
-type ThreadItem =
-  | { id: number; role: 'user'; text: string }
-  | { id: number; role: 'assistant'; answer: ChatDataAnswer; paging?: boolean; pageError?: string | null };
+import { useChatAssistant } from '../../context/ChatAssistantContext';
+import type { ChatDataAnswer, ChatDataTable, ChatDataTableColumn } from '../../types';
 
 const STATUS_STYLE: Record<
-  ChatDataStatus,
+  ChatDataAnswer['status'],
   { label: string; color: string; background: string; Icon: typeof Info } | null
 > = {
   answer: null,
@@ -314,115 +301,30 @@ function AnswerCard({
   );
 }
 
-function errorAnswer(message: string): ChatDataAnswer {
-  return {
-    status: 'error',
-    message,
-    narrative_source: 'template',
-    facts: [],
-    table: null,
-    periods: [],
-    filters: {},
-    caveats: [],
-    interpreted_by: 'none',
-  };
-}
+export function ChatWithDataPanel({
+  compact = false,
+  hideChrome = false,
+}: {
+  compact?: boolean;
+  hideChrome?: boolean;
+}) {
+  const {
+    availability,
+    statusError,
+    thread,
+    input,
+    setInput,
+    loading,
+    send,
+    turnPage,
+    reset,
+    maxChars,
+    enabled,
+    inputRef,
+    endRef,
+  } = useChatAssistant();
 
-export function ChatWithData() {
-  const [availability, setAvailability] = useState<ChatDataAvailability | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [thread, setThread] = useState<ThreadItem[]>([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [lastSpec, setLastSpec] = useState<ChatQuerySpec | null>(null);
-  const nextId = useRef(1);
-  const endRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    chatWithDataService
-      .status()
-      .then(data => {
-        if (!cancelled) setAvailability(data);
-      })
-      .catch(err => {
-        if (!cancelled) setStatusError(err instanceof ApiError ? err.message : 'Could not reach the server.');
-      });
-    return () => {
-      cancelled = true;
-      abortRef.current?.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [thread.length, loading]);
-
-  const maxChars = availability?.max_question_chars ?? 500;
-  const enabled = availability?.enabled === true;
-
-  const send = useCallback(
-    async (raw: string) => {
-      const question = raw.trim();
-      if (!question || loading || !enabled) return;
-      if (question.length > maxChars) return;
-      setThread(t => [...t, { id: nextId.current++, role: 'user', text: question }]);
-      setInput('');
-      setLoading(true);
-      const controller = new AbortController();
-      abortRef.current = controller;
-      try {
-        const answer = await chatWithDataService.ask(question, lastSpec, controller.signal);
-        if (answer.spec) setLastSpec(answer.spec);
-        setThread(t => [...t, { id: nextId.current++, role: 'assistant', answer }]);
-      } catch (err) {
-        if (controller.signal.aborted) return;
-        let message = 'Something went wrong while answering. Please try again.';
-        if (err instanceof ApiError) {
-          if (err.status === 401) message = 'Your session has expired. Please sign in again.';
-          else if (err.status === 422) message = 'That question could not be processed. Please rephrase it.';
-          else message = err.message || message;
-        }
-        setThread(t => [...t, { id: nextId.current++, role: 'assistant', answer: errorAnswer(message) }]);
-      } finally {
-        setLoading(false);
-        abortRef.current = null;
-        inputRef.current?.focus();
-      }
-    },
-    [enabled, lastSpec, loading, maxChars],
-  );
-
-  const turnPage = useCallback(async (itemId: number, spec: ChatQuerySpec, isLatest: boolean, page: number) => {
-    const update = (patch: Partial<Extract<ThreadItem, { role: 'assistant' }>>) =>
-      setThread(t => t.map(i => (i.id === itemId && i.role === 'assistant' ? { ...i, ...patch } : i)));
-    update({ paging: true, pageError: null });
-    try {
-      const answer = await chatWithDataService.page(spec, page);
-      if (answer.status !== 'answer') {
-        update({ paging: false, pageError: answer.message || 'This page could not be loaded.' });
-        return;
-      }
-      update({ answer, paging: false, pageError: null });
-      if (isLatest && answer.spec) setLastSpec(answer.spec);
-    } catch (err) {
-      let message = 'This page could not be loaded. Please try again.';
-      if (err instanceof ApiError && err.status === 401) message = 'Your session has expired. Please sign in again.';
-      else if (err instanceof ApiError && err.message) message = err.message;
-      update({ paging: false, pageError: message });
-    }
-  }, []);
-
-  const reset = () => {
-    abortRef.current?.abort();
-    setThread([]);
-    setLastSpec(null);
-    setInput('');
-    setLoading(false);
-    inputRef.current?.focus();
-  };
+  const tooLong = input.trim().length > maxChars;
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -431,13 +333,11 @@ export function ChatWithData() {
     }
   };
 
-  const tooLong = input.trim().length > maxChars;
-
   return (
     <div
       style={{
-        padding: '24px 28px',
-        maxWidth: 1280,
+        padding: hideChrome ? (compact ? '12px' : '16px 20px') : '24px 28px',
+        maxWidth: hideChrome ? 'none' : 1280,
         height: '100%',
         boxSizing: 'border-box',
         display: 'flex',
@@ -451,14 +351,40 @@ export function ChatWithData() {
           @media (prefers-reduced-motion: reduce) { .cwd-dot { animation: none !important; } }
         `}
       </style>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#0F172A' }}>Chat with Data</h1>
-          <p style={{ margin: '6px 0 0', fontSize: '0.875rem', color: '#64748B' }}>
-            Ask questions about distributor sales quantities (MT) within your data access. Financial years run April–March.
-          </p>
+      {!hideChrome && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#0F172A' }}>Chat with Data</h1>
+            <p style={{ margin: '6px 0 0', fontSize: '0.875rem', color: '#64748B' }}>
+              Ask questions about distributor sales quantities (MT) within your data access. Financial years run April–March.
+            </p>
+          </div>
+          {thread.length > 0 && (
+            <button
+              type="button"
+              onClick={reset}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '8px 14px',
+                fontSize: '0.8125rem',
+                color: BLUE,
+                background: 'white',
+                border: `1px solid ${BORDER}`,
+                borderRadius: 8,
+                cursor: 'pointer',
+              }}
+            >
+              <RotateCcw size={14} aria-hidden />
+              New conversation
+            </button>
+          )}
         </div>
-        {thread.length > 0 && (
+      )}
+
+      {hideChrome && thread.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
           <button
             type="button"
             onClick={reset}
@@ -466,8 +392,8 @@ export function ChatWithData() {
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              padding: '8px 14px',
-              fontSize: '0.8125rem',
+              padding: '6px 10px',
+              fontSize: '0.75rem',
               color: BLUE,
               background: 'white',
               border: `1px solid ${BORDER}`,
@@ -475,11 +401,11 @@ export function ChatWithData() {
               cursor: 'pointer',
             }}
           >
-            <RotateCcw size={14} aria-hidden />
+            <RotateCcw size={12} aria-hidden />
             New conversation
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {statusError && (
         <div role="alert" style={{ padding: 16, borderRadius: 10, background: '#FEF2F2', color: RED, fontSize: '0.875rem' }}>
@@ -501,7 +427,7 @@ export function ChatWithData() {
         <div
           style={{
             flex: 1,
-            minHeight: 360,
+            minHeight: compact ? 200 : 360,
             display: 'flex',
             flexDirection: 'column',
             border: `1px solid ${BORDER}`,
@@ -514,10 +440,10 @@ export function ChatWithData() {
             role="log"
             aria-live="polite"
             aria-label="Conversation"
-            style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}
+            style={{ flex: 1, overflowY: 'auto', padding: compact ? 12 : 20, display: 'flex', flexDirection: 'column', gap: 14 }}
           >
             {thread.length === 0 && (
-              <div style={{ margin: 'auto 0', textAlign: 'center', padding: '24px 8px' }}>
+              <div style={{ margin: 'auto 0', textAlign: 'center', padding: compact ? '16px 4px' : '24px 8px' }}>
                 <div
                   style={{
                     width: 52,
@@ -536,9 +462,17 @@ export function ChatWithData() {
                 <div style={{ fontSize: '0.8125rem', color: TEXT_SECONDARY, marginTop: 4 }}>
                   Answers are computed from consolidated sales data you have access to. Always name a financial year.
                 </div>
-                {availability.suggestions.length > 0 && (
+                {availability && availability.suggestions.length > 0 && (
                   <div
-                    style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 18, maxWidth: 760, marginInline: 'auto' }}
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 8,
+                      justifyContent: 'center',
+                      marginTop: 18,
+                      maxWidth: 760,
+                      marginInline: 'auto',
+                    }}
                     role="group"
                     aria-label="Suggested questions"
                   >
@@ -594,7 +528,7 @@ export function ChatWithData() {
                     latest={index === thread.length - 1}
                     onPage={
                       item.answer.spec
-                        ? page => void turnPage(item.id, item.answer.spec as ChatQuerySpec, index === thread.length - 1, page)
+                        ? page => void turnPage(item.id, item.answer.spec!, index === thread.length - 1, page)
                         : undefined
                     }
                     paging={item.paging}
@@ -644,7 +578,7 @@ export function ChatWithData() {
               e.preventDefault();
               void send(input);
             }}
-            style={{ borderTop: `1px solid ${BORDER}`, background: 'white', padding: '12px 16px' }}
+            style={{ borderTop: `1px solid ${BORDER}`, background: 'white', padding: compact ? '10px 12px' : '12px 16px' }}
           >
             <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
               <label htmlFor="chat-with-data-input" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
@@ -656,7 +590,7 @@ export function ChatWithData() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={onKeyDown}
-                rows={2}
+                rows={compact ? 2 : 2}
                 placeholder="e.g. Top 10 customers of a distributor in FY 2026-27"
                 disabled={loading}
                 aria-describedby="chat-with-data-hint"
@@ -665,7 +599,7 @@ export function ChatWithData() {
                   flex: 1,
                   resize: 'vertical',
                   minHeight: 44,
-                  maxHeight: 200,
+                  maxHeight: compact ? 120 : 200,
                   padding: '10px 14px',
                   fontSize: '0.875rem',
                   fontFamily: 'inherit',
@@ -711,4 +645,16 @@ export function ChatWithData() {
       )}
     </div>
   );
+}
+
+/** Route entry: opens the shared assistant in full-screen mode. */
+export function ChatWithData() {
+  const { openFullscreen, mode } = useChatAssistant();
+  useEffect(() => {
+    openFullscreen();
+  }, [openFullscreen]);
+
+  // Panel is rendered by FloatingChatAssistant; keep route for deep links / expand.
+  if (mode === 'fullscreen') return null;
+  return <ChatWithDataPanel />;
 }

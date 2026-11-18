@@ -10,6 +10,7 @@ from app.models.distributor import Distributor
 from app.models.distributor_parser_profile import DistributorParserProfile
 from app.models.distributor_customer_mapping import DistributorCustomerMapping
 from app.models.email_message import EmailAttachment, EmailMessage
+from app.models.executive_report import ExecutiveReport, ExecutiveReportEmail, ManagementRecipient
 from app.models.fg_master import FGMasterProduct, FGMasterVersion
 from app.models.product_alias_mapping import ProductAliasMapping
 from app.models.product_mapping_history import ProductMappingHistory
@@ -50,4 +51,7 @@ __all__ = [
     "SystemSetting",
     "LlmUsageLog",
     "ChatEmbedding",
+    "ExecutiveReport",
+    "ExecutiveReportEmail",
+    "ManagementRecipient",
 ]

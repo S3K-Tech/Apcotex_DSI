@@ -1,6 +1,8 @@
 import { Outlet, useOutletContext } from 'react-router';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
+import { FloatingChatAssistant } from '../chat/FloatingChatAssistant';
+import { ChatAssistantProvider } from '../../context/ChatAssistantContext';
 import type { LayoutContext } from '../../types';
 import type { OutlookSyncPermission, UserRole } from '../../types';
 
@@ -20,6 +22,7 @@ export function AppLayout({
   outlookSyncPermission = 'own',
 }: AppLayoutProps) {
   return (
+    <ChatAssistantProvider>
     <div
       className="flex h-screen overflow-hidden"
       style={{ fontFamily: "'Inter', system-ui, sans-serif", background: '#F7FAFC' }}
@@ -273,7 +276,9 @@ export function AppLayout({
           </div>
         </main>
       </div>
+      <FloatingChatAssistant />
     </div>
+    </ChatAssistantProvider>
   );
 }
 

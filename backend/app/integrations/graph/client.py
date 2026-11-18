@@ -581,6 +581,56 @@ class GraphClient:
             json_body=body,
         )
 
+    def send_mail(
+        self,
+        *,
+        subject: str,
+        body_text: str,
+        to: List[Dict[str, str]],
+        attachments: List[Dict[str, Any]],
+        mailbox: Optional[str] = None,
+    ) -> None:
+        """
+        Send a message from the configured mailbox via ``POST /users/{mailbox}/sendMail``.
+
+        Requires application permission ``Mail.Send``. Graph answers 202 once the
+        message is accepted for delivery; any error status raises ``GraphAPIError``.
+        ``attachments`` items: ``{"name", "content" (bytes), "content_type"}``.
+        """
+        import base64
+
+        if not to:
+            raise ValidationAppError("At least one recipient is required")
+        user_path = self._user_path(mailbox)
+        message: Dict[str, Any] = {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": body_text},
+            "toRecipients": [
+                {"emailAddress": {"address": r["email"], **({"name": r["name"]} if r.get("name") else {})}}
+                for r in to
+            ],
+            "attachments": [
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": a["name"],
+                    "contentType": a.get("content_type") or "application/octet-stream",
+                    "contentBytes": base64.b64encode(a["content"]).decode("ascii"),
+                }
+                for a in attachments
+            ],
+        }
+        logger.info(
+            "Sending Graph mail | mailbox={} | recipients={} | attachments={}",
+            self.resolve_mailbox(mailbox),
+            len(to),
+            len(attachments),
+        )
+        self._request(
+            "POST",
+            f"{user_path}/sendMail",
+            json_body={"message": message, "saveToSentItems": True},
+        )
+
     @staticmethod
     def is_excel_attachment(attachment: Dict[str, Any]) -> bool:
         """Return True when attachment looks like an Excel file."""

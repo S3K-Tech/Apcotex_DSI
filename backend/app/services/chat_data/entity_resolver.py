@@ -17,17 +17,24 @@ from rapidfuzz.distance import JaroWinkler
 from sqlalchemy import distinct, func, or_, select
 
 from app.constants.business_segments import BUSINESS_SEGMENTS, normalize_business_segment
+from app.models.customer_alias_mapping import CustomerAliasMapping
 from app.models.product_alias_mapping import ProductAliasMapping
 from app.models.sales_record import SalesRecord
 from app.repositories.sales_record_repository import company_expr
 from app.schemas.chat_data import AwaitingField, QueryFilters
-from app.services.chat_data.query_service import ChatQueryService, ResolvedFilters
+from app.services.chat_data.query_service import (
+    ChatQueryService,
+    ResolvedFilters,
+    _effective_location_display,
+    _effective_location_key,
+)
 from app.services.chat_data.retrieval_service import (
     DOC_DISTRIBUTOR,
     DOC_PRODUCT,
     DOC_PRODUCT_ALIAS,
     RetrievalService,
 )
+from app.services.customer_standardization.normalize import mapping_key
 from app.services.product_standardization import normalize_product_key, prefer_display_name
 from app.services.sales_insights_service import _customer_identity_expr
 from app.utils.distributor_name import normalize_distributor_name
@@ -37,6 +44,34 @@ _MAX_CUSTOMERS = 20000
 _FUZZY_DISTRIBUTOR = 88
 _FUZZY_PRODUCT = 90
 _FUZZY_CUSTOMER = 90
+
+# Natural-language location phrases → canonical keys matched against data values.
+_LOCATION_ALIAS_CANONICAL = {
+    "east": "india east",
+    "india east": "india east",
+    "east india": "india east",
+    "eastern": "india east",
+    "eastern india": "india east",
+    "west": "india west",
+    "india west": "india west",
+    "west india": "india west",
+    "western": "india west",
+    "western india": "india west",
+    "north": "india north",
+    "india north": "india north",
+    "north india": "india north",
+    "northern": "india north",
+    "northern india": "india north",
+    "south": "india south",
+    "india south": "india south",
+    "south india": "india south",
+    "southern": "india south",
+    "southern india": "india south",
+    "export": "export",
+    "exports": "export",
+    "export market": "export",
+    "export markets": "export",
+}
 
 ResolutionStatus = Literal["ok", "restricted", "not_found", "ambiguous"]
 
@@ -179,21 +214,53 @@ class EntityResolver:
         return Resolution("ok", rf)
 
     def _location(self, mention: str, rf: ResolvedFilters) -> Resolution:
-        q = self.qs.scoped(select(distinct(SalesRecord.location)), rf)
-        universe = sorted(
-            {" ".join(str(v or "").split()) for v in self.db.scalars(q).all()} - {""}, key=str.casefold
+        loc_display = _effective_location_display().label("effective_location")
+        loc_key = _effective_location_key()
+        q = self.qs.scoped(
+            select(loc_display).where(loc_key != "").distinct(),
+            rf,
         )
-        key = " ".join(mention.split()).casefold()
-        exact = [loc for loc in universe if loc.casefold() == key]
-        if exact:
-            return Resolution("ok", ResolvedFilters(location=exact[0]))
-        matches = [loc for loc in universe if len(key) >= 3 and key in loc.casefold()]
-        if len(matches) == 1:
-            return Resolution("ok", ResolvedFilters(location=matches[0]))
-        if matches:
-            return Resolution(
-                "ambiguous", target=AwaitingField.LOCATION, mention=mention, options=matches[:_MAX_OPTIONS]
-            )
+        universe = sorted(
+            {
+                " ".join(str(v or "").split())
+                for v in self.db.execute(q).scalars().all()
+            }
+            - {""},
+            key=str.casefold,
+        )
+        raw_key = " ".join(mention.split()).casefold()
+        alias_key = _LOCATION_ALIAS_CANONICAL.get(raw_key, raw_key)
+        # Prefer alias canonical when it uniquely matches a stored location.
+        search_keys = [alias_key] if alias_key != raw_key else [raw_key]
+        if alias_key != raw_key:
+            search_keys.append(raw_key)
+
+        for key in search_keys:
+            exact = [loc for loc in universe if loc.casefold() == key]
+            if exact:
+                return Resolution("ok", ResolvedFilters(location=exact[0]))
+            # Alias "india east" should match stored "India East" / "INDIA-EAST" etc.
+            compact = re.sub(r"[^a-z0-9]+", "", key)
+            if compact:
+                compact_hits = [
+                    loc for loc in universe if re.sub(r"[^a-z0-9]+", "", loc.casefold()) == compact
+                ]
+                if len(compact_hits) == 1:
+                    return Resolution("ok", ResolvedFilters(location=compact_hits[0]))
+                if len(compact_hits) > 1:
+                    return Resolution(
+                        "ambiguous",
+                        target=AwaitingField.LOCATION,
+                        mention=mention,
+                        options=compact_hits[:_MAX_OPTIONS],
+                    )
+            matches = [loc for loc in universe if len(key) >= 3 and key in loc.casefold()]
+            if len(matches) == 1:
+                return Resolution("ok", ResolvedFilters(location=matches[0]))
+            if matches:
+                return Resolution(
+                    "ambiguous", target=AwaitingField.LOCATION, mention=mention, options=matches[:_MAX_OPTIONS]
+                )
         return Resolution("not_found", target=AwaitingField.LOCATION, mention=mention)
 
     def _segment(self, mention: str) -> Resolution:
@@ -304,6 +371,18 @@ class EntityResolver:
         key = _customer_key(mention)
         if key in universe:
             return Resolution("ok", ResolvedFilters(customer_key=key, customer_name=universe[key]))
+
+        # Approved alias originals → standardized names already present in sales.
+        alias_standards = self._customer_alias_standards(mention, rf)
+        alias_hits = [_customer_key(n) for n in alias_standards if _customer_key(n) in universe]
+        alias_hits = _dedupe(alias_hits)
+        if len(alias_hits) == 1:
+            k = alias_hits[0]
+            return Resolution("ok", ResolvedFilters(customer_key=k, customer_name=universe[k]))
+        if len(alias_hits) > 1:
+            names = sorted({universe[k] for k in alias_hits}, key=str.casefold)[:_MAX_OPTIONS]
+            return Resolution("ambiguous", target=AwaitingField.CUSTOMER, mention=mention, options=names)
+
         matches: List[str] = []
         if len(key) >= 3:
             matches = [k for k in universe if key in k]
@@ -322,3 +401,37 @@ class EntityResolver:
             names = sorted({universe[k] for k in matches}, key=str.casefold)[:_MAX_OPTIONS]
             return Resolution("ambiguous", target=AwaitingField.CUSTOMER, mention=mention, options=names)
         return Resolution("not_found", target=AwaitingField.CUSTOMER, mention=mention)
+
+    def _customer_alias_standards(self, mention: str, rf: ResolvedFilters) -> List[str]:
+        """Resolve approved customer alias originals (exact + high-confidence typo) to standards."""
+        from app.services.customer_standardization.matching import HIGH_CONFIDENCE, CustomerMatcher
+
+        allowed_ids = [i for i, _ in self.distributors()]
+        if rf.distributor_id is not None:
+            allowed_ids = [rf.distributor_id]
+        q = select(CustomerAliasMapping).where(
+            CustomerAliasMapping.is_active.is_(True),
+            CustomerAliasMapping.status == "APPROVED",
+            or_(
+                CustomerAliasMapping.distributor_id.is_(None),
+                CustomerAliasMapping.distributor_id.in_(allowed_ids or [-1]),
+            ),
+        )
+        mappings = list(self.db.scalars(q).all())
+        if not mappings:
+            return []
+        needle = mapping_key(mention)
+        exact = [
+            m.standardized_customer_name
+            for m in mappings
+            if (m.normalized_original_name or "") == needle
+            or mapping_key(m.standardized_customer_name) == needle
+        ]
+        if exact:
+            return _dedupe(exact)
+        matcher = CustomerMatcher(mappings=mappings, master_names=(), sales_names=())
+        dist_id = rf.distributor_id if rf.distributor_id is not None else (allowed_ids[0] if len(allowed_ids) == 1 else None)
+        hit = matcher.match(mention, dist_id)
+        if hit.approved and hit.suggested and hit.confidence >= HIGH_CONFIDENCE:
+            return [hit.suggested]
+        return []

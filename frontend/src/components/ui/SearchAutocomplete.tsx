@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { Search, X } from 'lucide-react';
 import { BORDER } from '../../constants/theme';
 
@@ -15,7 +16,7 @@ type Props = {
 
 /**
  * Search-with-autocomplete filter (case-insensitive partial match).
- * Scales better than native <select> for hundreds/thousands of options.
+ * Dropdown is portaled so parent overflow never hides options.
  */
 export function SearchAutocomplete({
   label,
@@ -28,7 +29,9 @@ export function SearchAutocomplete({
 }: Props) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const inputWrapRef = useRef<HTMLDivElement>(null);
 
   const displayValue = value && value !== allValue ? value : '';
 
@@ -38,30 +41,53 @@ export function SearchAutocomplete({
     }
   }, [displayValue, open]);
 
+  const updateMenuPos = () => {
+    const el = inputWrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setMenuPos({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: Math.max(rect.width, 220),
+    });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPos();
+    const onScroll = () => updateMenuPos();
+    window.addEventListener('resize', updateMenuPos);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPos);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open]);
+
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery(displayValue);
-      }
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      const menu = document.getElementById(`sac-menu-${label}`);
+      if (menu?.contains(target)) return;
+      setOpen(false);
+      setQuery(displayValue);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
-  }, [displayValue]);
+  }, [displayValue, label]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const norm = (s: string) => s.toLowerCase().replace(/-/g, '').replace(/\s+/g, ' ').trim();
     const base = options.filter(o => o && o !== allValue);
-    if (!q) return base.slice(0, 40);
+    if (!q) return base; // show every DB value when browsing
     const nq = norm(q);
-    return base
-      .filter(o => {
-        const ol = o.toLowerCase();
-        if (ol.includes(q)) return true;
-        return norm(o).includes(nq);
-      })
-      .slice(0, 40);
+    return base.filter(o => {
+      const ol = o.toLowerCase();
+      if (ol.includes(q)) return true;
+      return norm(o).includes(nq);
+    });
   }, [options, query, allValue]);
 
   const select = (next: string) => {
@@ -70,12 +96,53 @@ export function SearchAutocomplete({
     setOpen(false);
   };
 
+  const menu =
+    open && menuPos
+      ? createPortal(
+          <div
+            id={`sac-menu-${label}`}
+            role="listbox"
+            aria-label={`${label} options`}
+            style={{
+              position: 'fixed',
+              zIndex: 5000,
+              top: menuPos.top,
+              left: menuPos.left,
+              width: menuPos.width,
+              maxHeight: 320,
+              overflowY: 'auto',
+              background: 'white',
+              border: `1px solid ${BORDER}`,
+              borderRadius: 8,
+              boxShadow: '0 12px 32px rgba(15, 23, 42, 0.18)',
+            }}
+          >
+            <button type="button" onClick={() => select(allValue)} style={optionStyle(value === allValue || !value)}>
+              All {label}s
+            </button>
+            {options.length === 0 ? (
+              <div style={{ padding: '10px 12px', fontSize: '0.75rem', color: '#9CA3AF' }}>
+                No values loaded from the database yet.
+              </div>
+            ) : filtered.length === 0 ? (
+              <div style={{ padding: '10px 12px', fontSize: '0.75rem', color: '#9CA3AF' }}>No matches</div>
+            ) : (
+              filtered.map(opt => (
+                <button key={opt} type="button" onClick={() => select(opt)} style={optionStyle(value === opt)} title={opt}>
+                  {opt}
+                </button>
+              ))
+            )}
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
     <div ref={rootRef} style={{ position: 'relative', width, minWidth: 160 }}>
-      <div style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600, marginBottom: 3 }}>
-        {label}
-      </div>
+      <div style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600, marginBottom: 3 }}>{label}</div>
       <div
+        ref={inputWrapRef}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -91,10 +158,19 @@ export function SearchAutocomplete({
         <input
           value={query}
           placeholder={placeholder}
-          onFocus={() => setOpen(true)}
+          onFocus={() => {
+            setOpen(true);
+            // next frame so layout is ready
+            requestAnimationFrame(updateMenuPos);
+          }}
+          onClick={() => {
+            setOpen(true);
+            requestAnimationFrame(updateMenuPos);
+          }}
           onChange={e => {
             setQuery(e.target.value);
             setOpen(true);
+            requestAnimationFrame(updateMenuPos);
           }}
           onKeyDown={e => {
             if (e.key === 'Enter' && filtered[0]) {
@@ -134,48 +210,7 @@ export function SearchAutocomplete({
           </button>
         )}
       </div>
-      {open && (
-        <div
-          style={{
-            position: 'absolute',
-            zIndex: 40,
-            top: '100%',
-            left: 0,
-            right: 0,
-            marginTop: 4,
-            maxHeight: 240,
-            overflowY: 'auto',
-            background: 'white',
-            border: `1px solid ${BORDER}`,
-            borderRadius: 8,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.1)',
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => select(allValue)}
-            style={optionStyle(value === allValue || !value)}
-          >
-            All {label}s
-          </button>
-          {filtered.length === 0 ? (
-            <div style={{ padding: '10px 12px', fontSize: '0.75rem', color: '#9CA3AF' }}>
-              No matches
-            </div>
-          ) : (
-            filtered.map(opt => (
-              <button
-                key={opt}
-                type="button"
-                onClick={() => select(opt)}
-                style={optionStyle(value === opt)}
-              >
-                {opt}
-              </button>
-            ))
-          )}
-        </div>
-      )}
+      {menu}
     </div>
   );
 }
@@ -191,5 +226,8 @@ function optionStyle(active: boolean): CSSProperties {
     color: active ? '#1D4ED8' : '#374151',
     fontSize: '0.8125rem',
     cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   };
 }

@@ -162,6 +162,30 @@ def test_fuzzy_is_suggestion_only_and_conservative(db, dists):
     assert r.status == UNMAPPED and r.alternatives == []
 
 
+def test_approved_mapping_typo_auto_applies_unambiguous_high_confidence(db, dists):
+    """Incoming typos of an approved original resolve to that mapping automatically."""
+    a, _b, _c = dists
+    _approve(db, a, "ASHISH PAPER", "ASHISH PAPER")
+    m = CustomerMatcher.load(db)
+    r = m.match("ASHISH PAPAR", a.id)
+    assert r.status == AUTO_MATCHED
+    assert r.approved
+    assert r.suggested == "ASHISH PAPER"
+    # Exact approved original still wins as a mapping hit.
+    exact = m.match("ASHISH PAPER", a.id)
+    assert exact.status == AUTO_MATCHED and exact.suggested == "ASHISH PAPER"
+
+
+def test_approved_mapping_medium_confidence_stays_needs_review(db, dists):
+    a, _b, _c = dists
+    _approve(db, a, "Kumar Rubber Products", "KUMAR RUBBER PRODUCTS")
+    m = CustomerMatcher.load(db)
+    r = m.match("Kumar Rubber Products Pvt Ltd", a.id)
+    # Legal-form mismatch is capped below AUTO threshold.
+    assert r.status == NEEDS_REVIEW
+    assert r.suggested == "KUMAR RUBBER PRODUCTS"
+
+
 def test_segment_scope_limits_reference_names(db, dists):
     a, _b, _c = dists
     _sale(db, a, "Paper Only Customer", segment="Paper")

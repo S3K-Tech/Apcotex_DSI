@@ -774,19 +774,25 @@ class SalesInsightsService:
             allowed_companies=allowed_companies,
         )
 
+        effective_location = func.coalesce(
+            func.nullif(func.trim(SalesRecord.location), ""),
+            func.nullif(func.trim(Distributor.region), ""),
+        )
+        loc_display = effective_location.label("effective_location")
         loc_q = (
-            select(distinct(SalesRecord.location))
+            select(loc_display)
             .select_from(SalesRecord)
             .join(Report, Report.id == SalesRecord.report_id)
             .outerjoin(Distributor, Distributor.id == SalesRecord.distributor_id)
             .where(
                 SalesRecord.is_deleted.is_(False),
                 Report.is_deleted.is_(False),
-                SalesRecord.location.is_not(None),
-                SalesRecord.location != "",
+                effective_location.is_not(None),
+                effective_location != "",
                 or_(Distributor.id.is_(None), Distributor.is_deleted.is_(False)),
             )
-            .order_by(SalesRecord.location.asc())
+            .distinct()
+            .order_by(loc_display.asc())
             .limit(500)
         )
         loc_q = self.sales._apply_filters(
@@ -824,7 +830,8 @@ class SalesInsightsService:
         customers = [str(c) for c in self.db.scalars(cust_q).all() if c]
         raw_products = [str(p) for p in self.db.scalars(prod_q).all() if p]
         products = canonical_products(raw_products)
-        locations = [str(loc) for loc in self.db.scalars(loc_q).all() if loc]
+        # Labelled expression — use execute().scalars() so DISTINCT coalesce rows resolve.
+        locations = [str(loc) for loc in self.db.execute(loc_q).scalars().all() if loc]
         segments = [str(s) for s in self.db.scalars(seg_q).all() if s]
         return {
             "distributors": distributors,
