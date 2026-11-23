@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   Play,
   Loader2,
@@ -9,6 +9,7 @@ import {
   Package,
   Info as InfoIcon,
   UserRound,
+  CheckCircle2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { CustomerWorkbenchModal } from './CustomerWorkbenchModal';
@@ -20,10 +21,95 @@ import {
   EmailsService,
   type ERPPreviewResponse,
   type ReviewSummary,
+  type StandardizationPendingItem,
 } from '../../services/emails.service';
 import { ApiError, getSession } from '../../api';
 import { isAdminRole } from '../../utils/rbac';
 import { formatPeriodDisplay } from '../../utils/quarter';
+
+type PendingCounts = {
+  products: number | null;
+  customers: number | null;
+  available: boolean;
+};
+
+function PendingStdBadge({
+  kind,
+  count,
+  available,
+}: {
+  kind: 'products' | 'customers';
+  count: number | null;
+  available: boolean;
+}) {
+  const isProducts = kind === 'products';
+  const label = isProducts ? 'Products' : 'Customers';
+  const Icon = isProducts ? Package : UserRound;
+  if (!available || count == null) {
+    return (
+      <span
+        title={`${label} pending: open workbench to calculate`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 3,
+          padding: '2px 6px',
+          borderRadius: 999,
+          fontSize: '0.625rem',
+          fontWeight: 600,
+          color: '#9CA3AF',
+          background: 'rgba(156,163,175,0.12)',
+          border: `1px solid ${BORDER}`,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <Icon size={10} /> —
+      </span>
+    );
+  }
+  if (count === 0) {
+    return (
+      <span
+        title={`${label}: no pending approvals`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 3,
+          padding: '2px 6px',
+          borderRadius: 999,
+          fontSize: '0.625rem',
+          fontWeight: 600,
+          color: '#065F46',
+          background: 'rgba(16,185,129,0.12)',
+          border: '1px solid rgba(16,185,129,0.35)',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <CheckCircle2 size={10} /> {isProducts ? 'Products' : 'Customers'} OK
+      </span>
+    );
+  }
+  return (
+    <span
+      title={`${label} pending approval: ${count}`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        padding: '2px 6px',
+        borderRadius: 999,
+        fontSize: '0.625rem',
+        fontWeight: 700,
+        color: isProducts ? '#1E3A8A' : '#92400E',
+        background: isProducts ? 'rgba(59,130,246,0.12)' : 'rgba(245,158,11,0.14)',
+        border: isProducts ? '1px solid rgba(59,130,246,0.35)' : '1px solid rgba(245,158,11,0.4)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <Icon size={10} /> {count}
+    </span>
+  );
+}
 
 /** Max unread emails per Sync Outlook click; max ready emails per Proceed batch. */
 const BATCH_LIMIT = 5;
@@ -196,6 +282,8 @@ export function EmailsModule() {
     mode: 'workbench' | 'customer' | 'data';
     attachmentId?: number | null;
   } | null>(null);
+  const [pendingByEmail, setPendingByEmail] = useState<Record<number, PendingCounts>>({});
+  const pendingRequestId = useRef(0);
   const [consolidateOpen, setConsolidateOpen] = useState(false);
   const [consolidateBusy, setConsolidateBusy] = useState(false);
   const [consolidateError, setConsolidateError] = useState<string | null>(null);
@@ -208,6 +296,36 @@ export function EmailsModule() {
   const [review, setReview] = useState<HumanReviewState | null>(null);
   const reviewRequestId = useRef(0);
 
+  const applyPendingItems = useCallback((items: StandardizationPendingItem[]) => {
+    setPendingByEmail(prev => {
+      const next = { ...prev };
+      for (const item of items) {
+        next[item.email_id] = {
+          products: item.products_pending,
+          customers: item.customers_pending,
+          available: item.available,
+        };
+      }
+      return next;
+    });
+  }, []);
+
+  const refreshPendingCounts = useCallback(
+    async (emailIds: number[]) => {
+      const ids = [...new Set(emailIds.filter(id => Number.isFinite(id) && id > 0))];
+      if (!ids.length) return;
+      const token = ++pendingRequestId.current;
+      try {
+        const items = await EmailsService.getStandardizationPending(ids);
+        if (token !== pendingRequestId.current) return;
+        applyPendingItems(items);
+      } catch {
+        /* badges are optional; list remains usable */
+      }
+    },
+    [applyPendingItems],
+  );
+
   const refreshEmails = async () => {
     const data = await EmailsService.getExtractedEmails();
     setEmails(data);
@@ -215,6 +333,8 @@ export function EmailsModule() {
     setSelectedEmailId(prev =>
       prev != null && data.some(e => e.id === prev) ? prev : null,
     );
+    const excelIds = data.filter(e => e.hasExcel !== false).map(e => e.id);
+    void refreshPendingCounts(excelIds);
   };
 
   const refreshAutoSyncStatus = async () => {
@@ -944,43 +1064,65 @@ export function EmailsModule() {
                           </span>
                         </div>
                         {email.hasExcel !== false && (
-                          <div style={{ display: 'inline-flex', gap: 4, marginLeft: 6, verticalAlign: 'top' }}>
-                            <button
-                              type="button"
-                              title="Product Standardization Workbench"
-                              aria-label="Open Product Standardization Workbench"
-                              style={iconBtn}
-                              onClick={event => {
-                                event.stopPropagation();
-                                setStandardization({ email, mode: 'workbench' });
-                              }}
-                            >
-                              <Package size={15} />
-                            </button>
-                            <button
-                              type="button"
-                              title="Customer Standardization Workbench"
-                              aria-label="Open Customer Standardization Workbench"
-                              style={iconBtn}
-                              onClick={event => {
-                                event.stopPropagation();
-                                setStandardization({ email, mode: 'customer' });
-                              }}
-                            >
-                              <UserRound size={15} />
-                            </button>
-                            <button
-                              type="button"
-                              title="Extracted data with standardized products"
-                              aria-label="Open extracted data with standardized products"
-                              style={iconBtn}
-                              onClick={event => {
-                                event.stopPropagation();
-                                setStandardization({ email, mode: 'data' });
-                              }}
-                            >
-                              <InfoIcon size={15} />
-                            </button>
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              flexDirection: 'column',
+                              gap: 4,
+                              marginLeft: 6,
+                              verticalAlign: 'top',
+                            }}
+                          >
+                            <div style={{ display: 'inline-flex', gap: 4 }}>
+                              <button
+                                type="button"
+                                title="Product Standardization Workbench"
+                                aria-label="Open Product Standardization Workbench"
+                                style={iconBtn}
+                                onClick={event => {
+                                  event.stopPropagation();
+                                  setStandardization({ email, mode: 'workbench' });
+                                }}
+                              >
+                                <Package size={15} />
+                              </button>
+                              <button
+                                type="button"
+                                title="Customer Standardization Workbench"
+                                aria-label="Open Customer Standardization Workbench"
+                                style={iconBtn}
+                                onClick={event => {
+                                  event.stopPropagation();
+                                  setStandardization({ email, mode: 'customer' });
+                                }}
+                              >
+                                <UserRound size={15} />
+                              </button>
+                              <button
+                                type="button"
+                                title="Extracted data with standardized products"
+                                aria-label="Open extracted data with standardized products"
+                                style={iconBtn}
+                                onClick={event => {
+                                  event.stopPropagation();
+                                  setStandardization({ email, mode: 'data' });
+                                }}
+                              >
+                                <InfoIcon size={15} />
+                              </button>
+                            </div>
+                            <div style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+                              <PendingStdBadge
+                                kind="products"
+                                count={pendingByEmail[email.id]?.products ?? null}
+                                available={Boolean(pendingByEmail[email.id]?.available)}
+                              />
+                              <PendingStdBadge
+                                kind="customers"
+                                count={pendingByEmail[email.id]?.customers ?? null}
+                                available={Boolean(pendingByEmail[email.id]?.available)}
+                              />
+                            </div>
                           </div>
                         )}
                       </td>
@@ -1411,7 +1553,22 @@ export function EmailsModule() {
           emailId={standardization.email.id}
           title={standardization.email.subject}
           initialAttachmentId={standardization.attachmentId}
-          onClose={() => setStandardization(null)}
+          onClose={() => {
+            const id = standardization.email.id;
+            setStandardization(null);
+            void refreshPendingCounts([id]);
+          }}
+          onPendingChange={productsPending => {
+            const id = standardization.email.id;
+            setPendingByEmail(prev => ({
+              ...prev,
+              [id]: {
+                products: productsPending,
+                customers: prev[id]?.customers ?? null,
+                available: true,
+              },
+            }));
+          }}
           onSwitchToCustomers={attachmentId => setStandardization(s => (s ? { ...s, mode: 'customer', attachmentId } : s))}
         />
       )}
@@ -1420,7 +1577,22 @@ export function EmailsModule() {
           emailId={standardization.email.id}
           title={standardization.email.subject}
           initialAttachmentId={standardization.attachmentId}
-          onClose={() => setStandardization(null)}
+          onClose={() => {
+            const id = standardization.email.id;
+            setStandardization(null);
+            void refreshPendingCounts([id]);
+          }}
+          onPendingChange={customersPending => {
+            const id = standardization.email.id;
+            setPendingByEmail(prev => ({
+              ...prev,
+              [id]: {
+                products: prev[id]?.products ?? null,
+                customers: customersPending,
+                available: true,
+              },
+            }));
+          }}
           onSwitchToProducts={attachmentId => setStandardization(s => (s ? { ...s, mode: 'workbench', attachmentId } : s))}
         />
       )}

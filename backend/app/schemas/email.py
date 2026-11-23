@@ -70,6 +70,12 @@ class FrontendEmailRecord(BaseModel):
     completedAt: Optional[str] = None
 
 
+class StandardizationPendingRequest(BaseModel):
+    """Batch pending Product/Customer approval counts for Emails list badges."""
+
+    email_ids: List[int] = Field(..., min_length=1, max_length=200)
+
+
 class OutlookOpenLinkResponse(BaseModel):
     """Resolved Outlook web URL for the View button."""
 

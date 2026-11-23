@@ -159,9 +159,27 @@ export type ReviewDecisionResult = {
   reporting_quarter?: string | null;
 };
 
+export type StandardizationPendingItem = {
+  email_id: number;
+  products_pending: number | null;
+  customers_pending: number | null;
+  available: boolean;
+};
+
 export const EmailsService = {
   getExtractedEmails: async (): Promise<EmailRecord[]> => {
     return apiRequest<EmailRecord[]>('/emails');
+  },
+
+  /** One batch call for Emails-list Product/Customer pending badges (snapshot-backed). */
+  getStandardizationPending: async (emailIds: number[]): Promise<StandardizationPendingItem[]> => {
+    const ids = [...new Set(emailIds.filter(id => Number.isFinite(id) && id > 0))];
+    if (!ids.length) return [];
+    const res = await apiRequest<{ success: boolean; data: { items: StandardizationPendingItem[] } }>(
+      '/emails/standardization-pending',
+      { method: 'POST', body: { email_ids: ids } },
+    );
+    return res.data?.items ?? [];
   },
 
   triggerSync: async (): Promise<{

@@ -162,6 +162,24 @@ def test_fuzzy_is_suggestion_only_and_conservative(db, dists):
     assert r.status == UNMAPPED and r.alternatives == []
 
 
+def test_approved_mapping_beats_fuzzy_master_suggestion(db, dists):
+    """Sales-approved mappings take precedence over fuzzy master suggestions."""
+    a, _b, _c = dists
+    _master(db, "Shree Ganesh Rubber Industries")
+    _approve(db, a, "Shree Ganesh Ruber Industries", "CUSTOM APPROVED CUSTOMER")
+    m = CustomerMatcher.load(db)
+    # Exact approved original → distributor mapping (not fuzzy master).
+    exact = m.match("Shree Ganesh Ruber Industries", a.id)
+    assert (exact.status, exact.method, exact.suggested) == (
+        AUTO_MATCHED, METHOD_DISTRIBUTOR_MAPPING, "CUSTOM APPROVED CUSTOMER",
+    )
+    assert exact.mapping_id is not None and exact.approved
+    # Without an exact key match, fuzzy against approved originals still wins.
+    typo = m.match("Shree Ganesh Rubar Industries", a.id)
+    assert typo.status == AUTO_MATCHED and typo.suggested == "CUSTOM APPROVED CUSTOMER"
+    assert typo.approved and typo.mapping_id is not None
+
+
 def test_approved_mapping_typo_auto_applies_unambiguous_high_confidence(db, dists):
     """Incoming typos of an approved original resolve to that mapping automatically."""
     a, _b, _c = dists
@@ -334,6 +352,10 @@ def test_apply_standardizes_future_rows_and_preserves_raw(db, dists):
     assert [r.get("customer_standardization_status") for r in rows] == [
         AUTO_MATCHED, AUTO_MATCHED, AUTO_MATCHED, NEEDS_REVIEW, UNMAPPED, None,
     ]
+    assert rows[0]["customer_mapping_id"] is not None
+    assert rows[1]["customer_mapping_id"] == rows[0]["customer_mapping_id"]
+    assert rows[2].get("customer_mapping_id") is None  # master exact, no alias row
+    assert rows[3].get("customer_mapping_id") is None and rows[4].get("customer_mapping_id") is None
     assert summary == {"auto_matched": 3, "needs_review": 1, "unmapped": 1}
 
 

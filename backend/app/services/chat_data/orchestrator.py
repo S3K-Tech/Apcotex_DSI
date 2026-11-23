@@ -234,6 +234,8 @@ class ChatDataOrchestrator:
             hints=self._hints,
             knowledge=self._knowledge(question),
         )
+        # Hybrid: IntentService may call the LLM, then RuleParser merges/overrides
+        # unambiguous shapes, restores dropped filters, and blocks injection.
         interpretation = intent.interpret(question, previous)
         if interpretation.usage:
             self._usage.append(("chat_with_data_intent", interpretation.usage, interpretation.model_id))

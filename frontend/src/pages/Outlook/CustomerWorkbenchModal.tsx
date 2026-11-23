@@ -20,12 +20,15 @@ type Props = {
   initialAttachmentId?: number | null;
   onClose: () => void;
   onSwitchToProducts?: (attachmentId: number | null) => void;
+  /** Notify Emails list badges when workbench metrics are known/updated. */
+  onPendingChange?: (customersPending: number) => void;
 };
 
 type Filter = 'all' | CustomerBucket;
 
 const PAGE_SIZE = 100;
 const MAX_BATCH = 500;
+const CUSTOMER_PENDING_BUCKETS = new Set<CustomerBucket>(['needs_review', 'unmapped']);
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -86,8 +89,16 @@ const tabBtn = (active: boolean): CSSProperties => ({
 });
 
 function errorText(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) return err.message || fallback;
-  return fallback;
+  if (!(err instanceof ApiError)) return fallback;
+  const base = err.message || fallback;
+  const details = err.details as { customers?: unknown } | undefined;
+  const customers = Array.isArray(details?.customers)
+    ? details.customers.filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+    : [];
+  if (!customers.length) return base;
+  const shown = customers.slice(0, 5).join(', ');
+  const more = customers.length > 5 ? ` (+${customers.length - 5} more)` : '';
+  return `${base} ${shown}${more}`;
 }
 
 // Unmatched customers default to their own raw name; the status is not affected.
@@ -241,7 +252,14 @@ function CustomerAutocomplete({
   );
 }
 
-export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = null, onClose, onSwitchToProducts }: Props) {
+export function CustomerWorkbenchModal({
+  emailId,
+  title,
+  initialAttachmentId = null,
+  onClose,
+  onSwitchToProducts,
+  onPendingChange,
+}: Props) {
   const [data, setData] = useState<CustomerWorkbenchData | null>(null);
   const [attachmentId, setAttachmentId] = useState<number | null>(initialAttachmentId);
   const [loading, setLoading] = useState(true);
@@ -253,8 +271,11 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
+  const [pendingOnly, setPendingOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [conflicts, setConflicts] = useState<CustomerApprovalOutcome[]>([]);
+  const onPendingChangeRef = useRef(onPendingChange);
+  onPendingChangeRef.current = onPendingChange;
 
   const load = useCallback(
     async (refresh = false) => {
@@ -270,6 +291,8 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
         setValues(next);
         setEditing({});
         setSelected({});
+        const m = res.metrics;
+        onPendingChangeRef.current?.((m?.needs_review || 0) + (m?.unmapped || 0));
       } catch (err) {
         setData(null);
         setError(errorText(err, 'The customer workbench could not be loaded.'));
@@ -286,17 +309,23 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
 
   useEffect(() => {
     setPage(1);
-  }, [filter, search, attachmentId]);
+  }, [filter, search, attachmentId, pendingOnly]);
 
   const canApprove = Boolean(data?.distributor);
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return (data?.items || []).filter(
-      i =>
-        (filter === 'all' || i.bucket === filter) &&
-        (!needle || i.raw_customer.toLowerCase().includes(needle) || (i.suggested_customer || '').toLowerCase().includes(needle))
-    );
-  }, [data, filter, search]);
+    return (data?.items || []).filter(i => {
+      if (pendingOnly && !CUSTOMER_PENDING_BUCKETS.has(i.bucket)) return false;
+      if (filter !== 'all' && i.bucket !== filter) return false;
+      if (!needle) return true;
+      const edited = (values[i.raw_customer] || '').toLowerCase();
+      return (
+        i.raw_customer.toLowerCase().includes(needle) ||
+        (i.suggested_customer || '').toLowerCase().includes(needle) ||
+        edited.includes(needle)
+      );
+    });
+  }, [data, filter, search, values, pendingOnly]);
   const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const pageItems = visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
@@ -429,6 +458,12 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
           {data && data.blank_rows > 0 && (
             <StatusBanner type="info" message={`${data.blank_rows} extracted row(s) have no customer name and are not listed.`} />
           )}
+          {data && m && m.approved === 0 && data.items.length > 0 && (
+            <StatusBanner
+              type="info"
+              message="No Sales-approved mappings match this attachment yet. Approve customers below to save mappings for future imports (existing sales rows are not changed)."
+            />
+          )}
 
           {conflicts.length > 0 && (
             <div style={{ border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.08)', borderRadius: 10, padding: '10px 12px' }}>
@@ -504,6 +539,24 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
                     aria-label="Search customers"
                     style={{ padding: '4px 8px', fontSize: '0.75rem', border: `1px solid ${BORDER}`, borderRadius: 6, minWidth: 180 }}
                   />
+                  <button
+                    type="button"
+                    aria-pressed={pendingOnly}
+                    title="Show only customers that still need approval"
+                    onClick={() => setPendingOnly(v => !v)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 999,
+                      border: `1px solid ${pendingOnly ? '#B45309' : BORDER}`,
+                      background: pendingOnly ? 'rgba(245,158,11,0.14)' : 'white',
+                      color: pendingOnly ? '#92400E' : '#374151',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Show Pending Only
+                  </button>
                 </div>
                 <button
                   type="button"
@@ -568,7 +621,12 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
                             <td style={cell}>{item.distributor || '—'}</td>
                             <td style={{ ...cell, fontWeight: 600 }}>
                               <span style={{ whiteSpace: 'pre-wrap' }}>{item.raw_customer}</span>
-                              <div style={{ fontSize: '0.6875rem', color: '#6B7280', fontWeight: 400 }}>{item.row_count} row(s)</div>
+                              <div style={{ fontSize: '0.6875rem', color: '#6B7280', fontWeight: 400 }}>
+                                {item.row_count} row(s)
+                                {item.quantity != null && Number.isFinite(item.quantity)
+                                  ? ` · qty ${Number(item.quantity).toLocaleString()}`
+                                  : ''}
+                              </div>
                             </td>
                             <td style={cell}>
                               {showEditor ? (
@@ -581,7 +639,11 @@ export function CustomerWorkbenchModal({ emailId, title, initialAttachmentId = n
                               ) : (
                                 <div>
                                   <div style={{ fontWeight: 600 }}>{item.suggested_customer || '—'}</div>
-                                  {item.method_label && <div style={{ fontSize: '0.6875rem', color: '#6B7280' }}>{item.method_label}</div>}
+                                  <div style={{ fontSize: '0.6875rem', color: '#6B7280' }}>
+                                    {[item.method_label, item.suggested_source ? SOURCE_LABEL[item.suggested_source] : null]
+                                      .filter(Boolean)
+                                      .join(' · ')}
+                                  </div>
                                 </div>
                               )}
                             </td>

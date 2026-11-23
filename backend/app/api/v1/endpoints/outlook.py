@@ -23,6 +23,7 @@ from app.schemas.email import (
     OutlookOpenLinkResponse,
     OutlookSyncRequest,
     OutlookSyncResponse,
+    StandardizationPendingRequest,
     SyncJobListResponse,
     SyncJobResponse,
 )
@@ -260,6 +261,35 @@ def list_emails(
         sender_email=sender_email,
     )
     return service.to_frontend_emails(messages)
+
+
+@router.post(
+    "/emails/standardization-pending",
+    response_model=DataResponse[dict],
+    summary="Batch pending Product/Customer standardization counts",
+    tags=["Emails"],
+)
+def standardization_pending(
+    payload: StandardizationPendingRequest,
+    current: RequireUser,
+    db: Session = Depends(get_db),
+) -> DataResponse[dict]:
+    """
+    One request for Emails-list badges. Uses existing workbench snapshots +
+    matcher bucket rules. Emails without a snapshot return available=false
+    (counts null) — never re-parses Excel here.
+    """
+    perm = _resolve_outlook_sync_permission(current, db)
+    if perm == OutlookSyncPermission.NONE.value:
+        raise ForbiddenError("Emails module is disabled for your account.")
+
+    from app.services.standardization_pending import StandardizationPendingService
+
+    items = StandardizationPendingService(db).counts_for_emails(
+        payload.email_ids,
+        segments=segment_scope_for_user(current, db),
+    )
+    return DataResponse(data={"items": items})
 
 
 @router.get(

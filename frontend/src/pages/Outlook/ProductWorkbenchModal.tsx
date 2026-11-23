@@ -24,7 +24,11 @@ type Props = {
   onClose: () => void;
   initialAttachmentId?: number | null;
   onSwitchToCustomers?: (attachmentId: number | null) => void;
+  /** Notify Emails list badges when workbench metrics are known/updated. */
+  onPendingChange?: (productsPending: number) => void;
 };
+
+const PRODUCT_PENDING_BUCKETS = new Set<WorkbenchItem['bucket']>(['awaiting_review', 'unmapped']);
 
 type Filter = 'all' | WorkbenchItem['bucket'];
 
@@ -211,7 +215,14 @@ function MasterAutocomplete({
   );
 }
 
-export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachmentId = null, onSwitchToCustomers }: Props) {
+export function ProductWorkbenchModal({
+  emailId,
+  title,
+  onClose,
+  initialAttachmentId = null,
+  onSwitchToCustomers,
+  onPendingChange,
+}: Props) {
   const [data, setData] = useState<WorkbenchData | null>(null);
   const [attachmentId, setAttachmentId] = useState<number | null>(initialAttachmentId);
   const [loading, setLoading] = useState(true);
@@ -222,7 +233,10 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
   const [editing, setEditing] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState<Filter>('all');
+  const [pendingOnly, setPendingOnly] = useState(false);
   const [page, setPage] = useState(1);
+  const onPendingChangeRef = useRef(onPendingChange);
+  onPendingChangeRef.current = onPendingChange;
 
   const load = useCallback(
     async (refresh = false) => {
@@ -238,6 +252,8 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
         setValues(next);
         setEditing({});
         setSelected({});
+        const m = res.metrics;
+        onPendingChangeRef.current?.((m?.awaiting_review || 0) + (m?.unmapped || 0));
       } catch (err) {
         setData(null);
         setError(errorText(err, 'The workbench could not be loaded.'));
@@ -254,7 +270,7 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
 
   useEffect(() => {
     setPage(1);
-  }, [filter, attachmentId]);
+  }, [filter, attachmentId, pendingOnly]);
 
   const canApprove = Boolean(data?.distributor);
   const itemsByRaw = useMemo(() => {
@@ -266,11 +282,12 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
   const visibleRows = useMemo(
     () =>
       (data?.table?.rows || []).filter(r => {
-        if (filter === 'all') return true;
         const item = itemsByRaw.get(r.raw_product);
+        if (pendingOnly && (!item || !PRODUCT_PENDING_BUCKETS.has(item.bucket))) return false;
+        if (filter === 'all') return true;
         return item !== undefined && item.bucket === filter;
       }),
-    [data, filter, itemsByRaw]
+    [data, filter, itemsByRaw, pendingOnly]
   );
   const visible = useMemo(() => {
     const seen = new Set<string>();
@@ -422,7 +439,7 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   {FILTERS.map(f => (
                     <button
                       key={f.key}
@@ -442,6 +459,24 @@ export function ProductWorkbenchModal({ emailId, title, onClose, initialAttachme
                       {f.label}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    aria-pressed={pendingOnly}
+                    title="Show only products that still need approval"
+                    onClick={() => setPendingOnly(v => !v)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 999,
+                      border: `1px solid ${pendingOnly ? '#B45309' : BORDER}`,
+                      background: pendingOnly ? 'rgba(245,158,11,0.14)' : 'white',
+                      color: pendingOnly ? '#92400E' : '#374151',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Show Pending Only
+                  </button>
                 </div>
                 <button
                   type="button"
