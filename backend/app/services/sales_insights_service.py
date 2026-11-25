@@ -11,14 +11,22 @@ from dateutil.relativedelta import relativedelta
 from sqlalchemy import distinct, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.customer_master import CustomerMaster
 from app.models.distributor import Distributor
 from app.models.report import Report
 from app.models.sales_record import SalesRecord
+from app.services.customer_standardization.normalize import clean_display
 from app.repositories.sales_record_repository import (
     SalesRecordRepository,
     company_expr,
     mt_quantity_expr,
     reporting_month_expr,
+)
+from app.services.customer_standardization.display import (
+    canonical_customers,
+    expand_customer_filter,
+    merge_customer_quantities,
+    normalize_customer_key,
 )
 from app.services.product_standardization import (
     canonical_products,
@@ -732,25 +740,16 @@ class SalesInsightsService:
             allowed_companies=allowed_companies,
         )
 
-        cust_q = (
-            select(distinct(SalesRecord.customer_name))
-            .select_from(SalesRecord)
-            .join(Report, Report.id == SalesRecord.report_id)
-            .outerjoin(Distributor, Distributor.id == SalesRecord.distributor_id)
+        # Approved customer directory from master (authoritative post-standardization).
+        master_q = (
+            select(CustomerMaster.customer_name)
             .where(
-                SalesRecord.is_deleted.is_(False),
-                Report.is_deleted.is_(False),
-                SalesRecord.customer_name.is_not(None),
-                SalesRecord.customer_name != "",
-                or_(Distributor.id.is_(None), Distributor.is_deleted.is_(False)),
+                CustomerMaster.is_deleted.is_(False),
+                CustomerMaster.is_active.is_(True),
+                CustomerMaster.customer_name.is_not(None),
+                func.trim(CustomerMaster.customer_name) != "",
             )
-            .order_by(SalesRecord.customer_name.asc())
-            .limit(5000)
-        )
-        cust_q = self.sales._apply_filters(
-            cust_q,
-            allowed_segments=allowed_segments,
-            allowed_companies=allowed_companies,
+            .order_by(CustomerMaster.customer_name.asc())
         )
 
         prod_q = (
@@ -827,7 +826,9 @@ class SalesInsightsService:
             for r in self.db.execute(dist_q).all()
             if r[0] is not None
         ]
-        customers = [str(c) for c in self.db.scalars(cust_q).all() if c]
+        customers = canonical_customers(
+            [str(c) for c in self.db.scalars(master_q).all() if c]
+        )
         raw_products = [str(p) for p in self.db.scalars(prod_q).all() if p]
         products = canonical_products(raw_products)
         # Labelled expression — use execute().scalars() so DISTINCT coalesce rows resolve.
@@ -874,14 +875,19 @@ class SalesInsightsService:
             Report.is_deleted.is_(False),
             Distributor.is_deleted.is_(False),
         )
-        # Expand canonical product selection to all raw DB aliases.
+        # Expand canonical product/customer selection to all raw DB aliases.
         product_variants: Optional[List[str]] = None
         if product and str(product).strip() and str(product).strip().lower() != "all":
             product_variants = expand_product_filter(product, self.sales.distinct_products())
+        customer_variants: Optional[List[str]] = None
+        if customer and str(customer).strip() and str(customer).strip().lower() != "all":
+            customer_variants = expand_customer_filter(
+                customer, self.sales.distinct_customers()
+            )
         q = self.sales._apply_filters(
             q,
             distributor_id=distributor_id,
-            customer=customer,
+            customer=None if customer_variants else customer,
             product=None if product_variants else product,
             location=location,
             segment=segment,
@@ -894,6 +900,10 @@ class SalesInsightsService:
             lowers = [p.strip().lower() for p in product_variants if p and p.strip()]
             if lowers:
                 q = q.where(func.lower(SalesRecord.product).in_(lowers))
+        if customer_variants:
+            lowers = [c.strip().lower() for c in customer_variants if c and c.strip()]
+            if lowers:
+                q = q.where(func.lower(SalesRecord.customer_name).in_(lowers))
         return q
 
     def scoped_query(
@@ -980,7 +990,6 @@ class SalesInsightsService:
         kpi_q = self._with_filter(
             select(
                 func.coalesce(func.sum(mt_quantity_expr()), 0),
-                func.count(distinct(_customer_identity_expr())),
                 func.count(SalesRecord.id),
             )
             .select_from(SalesRecord)
@@ -989,10 +998,26 @@ class SalesInsightsService:
             filt,
             **scope_kw,
         )
-        total_kg, total_customers, _record_count = self.db.execute(kpi_q).one()
+        total_kg, _record_count = self.db.execute(kpi_q).one()
         total_kg_f = _to_float(total_kg)
         total_qty_f = round_mt(total_kg_f)
-        # Distinct products counted on canonical keys (formatting variants collapsed).
+        # Distinct approved customers in scope: exact trimmed names only (no heuristic merge).
+        cust_distinct_q = self._with_filter(
+            select(distinct(SalesRecord.customer_name))
+            .select_from(SalesRecord)
+            .join(Report, Report.id == SalesRecord.report_id)
+            .join(Distributor, Distributor.id == SalesRecord.distributor_id)
+            .where(
+                SalesRecord.customer_name.is_not(None),
+                func.trim(SalesRecord.customer_name) != "",
+            ),
+            filt,
+            **scope_kw,
+        )
+        raw_scoped_customers = [
+            clean_display(c) for c in self.db.scalars(cust_distinct_q).all() if clean_display(c)
+        ]
+        total_customers = len(canonical_customers(raw_scoped_customers))
         prod_distinct_q = self._with_filter(
             select(distinct(SalesRecord.product))
             .select_from(SalesRecord)
@@ -1118,8 +1143,14 @@ class SalesInsightsService:
             for name, qty_kg in self.db.execute(top_q).all()
             if name
         ]
+        customer_kg = merge_customer_quantities(
+            customer_kg, name_key="customer", qty_key="kg"
+        )
+        customer_kg = sorted(
+            customer_kg, key=lambda row: float(row.get("kg") or 0), reverse=True
+        )
         if len(customer_kg) > 10:
-            others_kg = sum(row["kg"] for row in customer_kg[10:])
+            others_kg = sum(float(row["kg"]) for row in customer_kg[10:])
             customer_kg = customer_kg[:10]
             if others_kg:
                 customer_kg.append({"customer": "Others", "kg": others_kg})
@@ -1214,16 +1245,26 @@ class SalesInsightsService:
             **scope_kw,
         )
         table_rows = []
-        display_by_key = {
+        product_display_by_key = {
             normalize_product_key(name): name for name in canonical_products(raw_scoped_products)
+        }
+        customer_display_by_key = {
+            normalize_customer_key(name): name
+            for name in canonical_customers(raw_scoped_customers)
         }
         for customer_name, product_name, location, month, qty_kg, distributor in self.db.execute(rows_q).all():
             quantity_mt = round_mt(qty_kg)
             raw_product = str(product_name or "")
-            display_product = display_by_key.get(normalize_product_key(raw_product), raw_product)
+            display_product = product_display_by_key.get(
+                normalize_product_key(raw_product), raw_product
+            )
+            raw_customer = str(customer_name or "")
+            display_customer = customer_display_by_key.get(
+                normalize_customer_key(raw_customer), raw_customer
+            )
             table_rows.append(
                 {
-                    "customer": str(customer_name or ""),
+                    "customer": display_customer,
                     "product": display_product,
                     "location": str(location or ""),
                     "month": format_period_display(str(month or "")),

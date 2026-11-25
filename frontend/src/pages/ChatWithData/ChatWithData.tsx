@@ -9,10 +9,27 @@ import {
   SearchX,
   Send,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { Pagination } from '../../components/ui/Pagination';
 import { BG, BLUE, BORDER, RED, TEAL, TEXT, TEXT_SECONDARY } from '../../constants/theme';
 import { useChatAssistant } from '../../context/ChatAssistantContext';
-import type { ChatDataAnswer, ChatDataTable, ChatDataTableColumn } from '../../types';
+import type { ChatDataAnswer, ChatDataChart, ChatDataTable, ChatDataTableColumn } from '../../types';
+
+const CHART_COLORS = ['#0F766E', '#1D4ED8', '#B45309', '#BE123C', '#7C3AED', '#0E7490', '#4D7C0F', '#C2410C'];
 
 const STATUS_STYLE: Record<
   ChatDataAnswer['status'],
@@ -89,6 +106,56 @@ function ResultTable({ table }: { table: ChatDataTable }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ResultChart({ chart }: { chart: ChatDataChart }) {
+  if (!chart.points?.length) return null;
+  const data = chart.points.map(p => ({ name: p.name, value: Number(p.value) || 0 }));
+  const unit = chart.unit || 'MT';
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        border: `1px solid ${BORDER}`,
+        borderRadius: 10,
+        background: 'white',
+        padding: '10px 12px 6px',
+      }}
+    >
+      <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: TEXT, marginBottom: 8 }}>{chart.title}</div>
+      <div style={{ width: '100%', height: 260 }}>
+        <ResponsiveContainer>
+          {chart.type === 'pie' ? (
+            <PieChart>
+              <Pie data={data} dataKey="value" nameKey="name" outerRadius={90} label={({ name }) => name}>
+                {data.map((_, i) => (
+                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(v: number) => [`${v} ${unit}`, 'Quantity']} />
+              <Legend />
+            </PieChart>
+          ) : chart.type === 'line' ? (
+            <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={data.length > 6 ? -30 : 0} textAnchor={data.length > 6 ? 'end' : 'middle'} height={data.length > 6 ? 60 : 30} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v: number) => [`${v} ${unit}`, 'Quantity']} />
+              <Line type="monotone" dataKey="value" stroke={TEAL} strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          ) : (
+            <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={data.length > 5 ? -30 : 0} textAnchor={data.length > 5 ? 'end' : 'middle'} height={data.length > 5 ? 70 : 30} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v: number) => [`${v} ${unit}`, 'Quantity']} />
+              <Bar dataKey="value" fill={BLUE} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
@@ -200,6 +267,8 @@ function AnswerCard({
           ))}
         </div>
       )}
+
+      {answer.chart && <ResultChart chart={answer.chart} />}
 
       {answer.table && (
         <div style={{ opacity: paging ? 0.55 : 1, transition: 'opacity 0.15s' }} aria-busy={paging}>
@@ -317,7 +386,7 @@ export function ChatWithDataPanel({
     loading,
     send,
     turnPage,
-    reset,
+    newChat,
     maxChars,
     enabled,
     inputRef,
@@ -359,35 +428,34 @@ export function ChatWithDataPanel({
               Ask questions about distributor sales quantities (MT) within your data access. Financial years run April–March.
             </p>
           </div>
-          {thread.length > 0 && (
-            <button
-              type="button"
-              onClick={reset}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '8px 14px',
-                fontSize: '0.8125rem',
-                color: BLUE,
-                background: 'white',
-                border: `1px solid ${BORDER}`,
-                borderRadius: 8,
-                cursor: 'pointer',
-              }}
-            >
-              <RotateCcw size={14} aria-hidden />
-              New conversation
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={newChat}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '8px 14px',
+              fontSize: '0.8125rem',
+              color: BLUE,
+              background: 'white',
+              border: `1px solid ${BORDER}`,
+              borderRadius: 8,
+              cursor: 'pointer',
+            }}
+          >
+            <RotateCcw size={14} aria-hidden />
+            New conversation
+          </button>
         </div>
       )}
 
-      {hideChrome && thread.length > 0 && (
+      {hideChrome && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
           <button
             type="button"
-            onClick={reset}
+            onClick={newChat}
+            title="Start a new chat (current chat is saved)"
             style={{
               display: 'inline-flex',
               alignItems: 'center',

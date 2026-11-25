@@ -605,12 +605,25 @@ export interface ChatDataPagination {
   entity: string;
 }
 
+export interface ChatDataChartPoint {
+  name: string;
+  value: number;
+}
+
+export interface ChatDataChart {
+  type: 'pie' | 'bar' | 'line';
+  title: string;
+  unit?: string;
+  points: ChatDataChartPoint[];
+}
+
 export interface ChatDataAnswer {
   status: ChatDataStatus;
   message: string;
   narrative_source: 'template' | 'llm_verified';
   facts: ChatDataFact[];
   table?: ChatDataTable | null;
+  chart?: ChatDataChart | null;
   pagination?: ChatDataPagination | null;
   unit?: string | null;
   periods: string[];

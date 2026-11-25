@@ -1131,6 +1131,10 @@ class SalesRecordRepository(BaseRepository[SalesRecord]):
         """Return sorted distinct product names."""
         return self.distinct_column_values("product")
 
+    def distinct_customers(self) -> List[str]:
+        """Return sorted distinct customer names."""
+        return self.distinct_column_values("customer_name")
+
     def distinct_periods(self) -> List[str]:
         """Return sorted distinct periods."""
         return self.distinct_column_values("period")

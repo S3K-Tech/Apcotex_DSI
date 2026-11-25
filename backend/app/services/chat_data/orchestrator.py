@@ -19,6 +19,7 @@ from app.schemas.audit import AuditTrailCreate
 from app.schemas.chat_data import (
     AwaitingField,
     ChatAnswer,
+    ChatChart,
     ChatClarification,
     ChatPagination,
     PeriodRef,
@@ -34,6 +35,7 @@ from app.services.chat_data.answer_builder import (
     build_aggregate,
     build_breakdown,
     build_caveats,
+    build_chart,
     build_compare,
     build_count,
     build_count_per_segment,
@@ -59,7 +61,16 @@ logger = get_logger(__name__)
 
 ALL_PERIODS_LABEL = "all available periods"
 _ALL_PERIODS_OPTION = "All available periods"
+_ALL_REGIONS_OPTION = "All regions"
 _DIMENSION_OPTIONS = ["Customers", "Products", "Distributors", "Segments"]
+_LOCATION_OPTIONS = [
+    "India East",
+    "India West",
+    "India North",
+    "India South",
+    "Export",
+    _ALL_REGIONS_OPTION,
+]
 _KIND_LABEL = {
     AwaitingField.DISTRIBUTOR: "distributor",
     AwaitingField.CUSTOMER: "customer",
@@ -330,7 +341,22 @@ class ChatDataOrchestrator:
         if spec.intent == QueryIntent.CLARIFY or spec.awaiting is not None:
             question = spec.clarification_question or "Could you tell me a bit more about what you need?"
             awaiting = spec.awaiting or AwaitingField.PERIOD
-            options = self._fy_options() if awaiting in (AwaitingField.PERIOD, AwaitingField.SECOND_PERIOD) else []
+            if awaiting in (AwaitingField.PERIOD, AwaitingField.SECOND_PERIOD):
+                options = self._fy_options()
+            elif awaiting == AwaitingField.LOCATION:
+                options = list(_LOCATION_OPTIONS)
+                # Prefer previous region as the first chip when present in the question text.
+                prev = None
+                for opt in ("India East", "India West", "India North", "India South", "Export"):
+                    if opt in (question or ""):
+                        prev = opt
+                        break
+                if prev and prev in options:
+                    options = [prev] + [o for o in options if o != prev]
+            elif awaiting == AwaitingField.DIMENSION:
+                options = list(_DIMENSION_OPTIONS)
+            else:
+                options = []
             if spec.intent == QueryIntent.CLARIFY:
                 return ChatAnswer(
                     status="clarification",
@@ -339,6 +365,18 @@ class ChatDataOrchestrator:
                     spec=None if spec.awaiting is None else spec,
                 )
             return self._clarify(spec, question, awaiting, options)
+        if (
+            spec.chart_type
+            and spec.intent in (QueryIntent.RANK, QueryIntent.LIST, QueryIntent.BREAKDOWN, QueryIntent.AGGREGATE)
+            and spec.dimension is None
+            and spec.metric != QueryMetric.ENTITY_COUNT
+        ):
+            return self._clarify(
+                spec,
+                "What should the chart show — customers, products, distributors or segments?",
+                AwaitingField.DIMENSION,
+                _DIMENSION_OPTIONS,
+            )
         if spec.intent in (QueryIntent.RANK, QueryIntent.LIST, QueryIntent.BREAKDOWN) and spec.dimension is None:
             word = {QueryIntent.RANK: "Top", QueryIntent.LIST: "List"}.get(spec.intent, "Break down by")
             return self._clarify(
@@ -432,6 +470,9 @@ class ChatDataOrchestrator:
         period = periods[0]
         monthly = None
         pagination: Optional[ChatPagination] = None
+        chart: Optional[ChatChart] = None
+        chart_rows = None
+        chart_total = 0.0
         built: BuiltAnswer
         if (
             intent == QueryIntent.AGGREGATE
@@ -454,6 +495,7 @@ class ChatDataOrchestrator:
             rows = self.qs.grouped(rf, period, dim)
             total = self.qs.total(rf, period).quantity_mt
             built, pagination = build_list(spec, rf, labels[0], rows, total)
+            chart_rows, chart_total = rows, total
         elif intent in (QueryIntent.RANK, QueryIntent.BREAKDOWN):
             dim = spec.dimension or QueryDimension.CUSTOMER
             if dim == QueryDimension.MONTH:
@@ -462,6 +504,7 @@ class ChatDataOrchestrator:
             total = self.qs.total(rf, period).quantity_mt
             builder = build_rank if intent == QueryIntent.RANK else build_breakdown
             built = builder(spec, rf, labels[0], rows, total)
+            chart_rows, chart_total = rows, total
         elif intent == QueryIntent.COMPARE:
             totals = (self.qs.total(rf, periods[0]), self.qs.total(rf, periods[1]))
             built = build_compare(rf, (labels[0], labels[1]), totals)
@@ -481,6 +524,38 @@ class ChatDataOrchestrator:
             built = build_trend(rf, labels[0], monthly)
         else:
             return ChatAnswer(status="unsupported", message="That question type is not supported yet.")
+
+        if spec.chart_type:
+            from app.services.chat_data.query_service import GroupRow
+            from app.utils.period_calendar import month_label as _month_label
+
+            if intent == QueryIntent.TREND and monthly is not None:
+                trend_rows = [
+                    GroupRow(key=f"{y}-{m}", label=_month_label(m, y), quantity_mt=float(qty))
+                    for y, m, qty in monthly.months
+                ]
+                if trend_rows:
+                    chart = build_chart(
+                        "line",
+                        title="Line chart — monthly quantity (MT)",
+                        rows=trend_rows,
+                        total=sum(r.quantity_mt for r in trend_rows),
+                        limit=24,
+                    )
+            elif chart_rows is not None and spec.chart_type:
+                dim_label = (spec.dimension.value if spec.dimension else "items").replace("_", " ")
+                limit = spec.limit if intent == QueryIntent.RANK else min(12, max(spec.limit, 10))
+                chart = build_chart(
+                    spec.chart_type,
+                    title=f"{spec.chart_type.title()} chart — {dim_label} quantity (MT)",
+                    rows=chart_rows,
+                    total=chart_total,
+                    limit=limit,
+                )
+            if chart and "chart" not in built.message.casefold():
+                built.message = (
+                    f"{built.message.rstrip()} A {chart.type} chart of the quantity distribution is shown below."
+                )
 
         if built.empty:
             joined = " or ".join(labels)
@@ -532,6 +607,7 @@ class ChatDataOrchestrator:
             narrative_source=source,
             facts=built.facts,
             table=built.table,
+            chart=chart,
             pagination=pagination,
             unit=UNIT,
             periods=labels,

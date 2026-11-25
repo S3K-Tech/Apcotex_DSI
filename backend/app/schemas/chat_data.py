@@ -125,6 +125,8 @@ class QuerySpec(BaseModel):
     pending_quarters: List[int] = Field(default_factory=list, max_length=2)
     # The single "Did you mean …?" suggestion, so a plain "yes" confirms it.
     suggestion: Optional[str] = Field(default=None, max_length=MAX_MENTION_CHARS)
+    # Optional chart the user asked for (pie / bar / line). Built from authorised SQL rows.
+    chart_type: Optional[Literal["pie", "bar", "line"]] = None
 
     @field_validator("pending_quarters")
     @classmethod
@@ -223,12 +225,25 @@ class ChatClarification(BaseModel):
     options: List[str] = Field(default_factory=list)
 
 
+class ChatChartPoint(BaseModel):
+    name: str
+    value: float
+
+
+class ChatChart(BaseModel):
+    type: Literal["pie", "bar", "line"]
+    title: str
+    unit: str = "MT"
+    points: List[ChatChartPoint] = Field(default_factory=list)
+
+
 class ChatAnswer(BaseModel):
     status: ChatStatus
     message: str
     narrative_source: Literal["template", "llm_verified"] = "template"
     facts: List[ChatFact] = Field(default_factory=list)
     table: Optional[ChatTable] = None
+    chart: Optional[ChatChart] = None
     pagination: Optional[ChatPagination] = None
     unit: Optional[str] = None
     periods: List[str] = Field(default_factory=list)

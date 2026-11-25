@@ -80,6 +80,20 @@ backend/downloads/*
 *~
 
 # ---------------------------------------------------------------
+# PostgreSQL / database dumps
+# ---------------------------------------------------------------
+*.dump
+*.sql.dump
+*.pgdump
+*.pgsql
+*pg_dump*
+apcotex_salesinsights*.dump
+apcotex_salesinsights*.sql
+**/dumps/
+**/db_dumps/
+**/data_dumps/
+
+# ---------------------------------------------------------------
 # Editors and OS
 # ---------------------------------------------------------------
 .vscode/
