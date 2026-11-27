@@ -135,6 +135,7 @@ Confirm silently that: every number you wrote appears in the brief; every named 
 
 
 
+
 class ExecutiveSummaryError(AppException):
     """The LLM could not produce a usable executive summary."""
 
