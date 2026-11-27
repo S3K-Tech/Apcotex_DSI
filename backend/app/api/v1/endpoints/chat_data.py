@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 import threading
 import time
 from collections import defaultdict, deque
 from typing import Deque, Dict
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.database.session import get_db
 from app.dependencies.rbac import RequestUser, RequireUser, data_scope_for_user
 from app.exceptions import AppException
-from app.schemas.chat_data import ChatAnswer, ChatAskRequest, ChatPageRequest, ChatStatusResponse
+from app.schemas.chat_data import (
+    ChatAnswer,
+    ChatAskRequest,
+    ChatExportRequest,
+    ChatPageRequest,
+    ChatStatusResponse,
+)
 from app.schemas.common import DataResponse
+from app.services.chat_data.excel_export import build_chat_excel, build_export_filename
 from app.services.chat_data.orchestrator import ChatDataOrchestrator
 from app.services.chat_data.scope import ChatScope
 from app.services.llm_settings_service import LlmSettingsService
@@ -107,3 +116,39 @@ def page(
     orchestrator = ChatDataOrchestrator(db, _scope(current, db))
     answer = orchestrator.page(payload.spec, payload.page, payload.page_size)
     return DataResponse(data=answer)
+
+
+@router.post("/export", summary="Export a Chat with Data answer to Excel (.xlsx)")
+def export_chat_answer(
+    payload: ChatExportRequest,
+    current: RequireUser,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    _require_enabled()
+    full_table = payload.table
+    # If the answer was paginated, fetch all rows in scope (up to 5000) so the Excel is complete.
+    if (
+        payload.spec is not None
+        and payload.pagination is not None
+        and payload.pagination.total_records > len(payload.table.rows if payload.table else [])
+    ):
+        try:
+            orchestrator = ChatDataOrchestrator(db, _scope(current, db))
+            full_answer = orchestrator.page(
+                payload.spec,
+                page=1,
+                page_size=min(int(payload.pagination.total_records), 5000),
+            )
+            if full_answer.table and full_answer.table.rows:
+                full_table = full_answer.table
+        except Exception:  # noqa: BLE001 — fall back to the visible table
+            full_table = payload.table
+
+    content = build_chat_excel(payload, full_table=full_table)
+    filename = build_export_filename(payload.question)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+

@@ -1,6 +1,7 @@
-import { useEffect, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   AlertTriangle,
+  Download,
   HelpCircle,
   Info,
   Lock,
@@ -27,6 +28,7 @@ import {
 import { Pagination } from '../../components/ui/Pagination';
 import { BG, BLUE, BORDER, RED, TEAL, TEXT, TEXT_SECONDARY } from '../../constants/theme';
 import { useChatAssistant } from '../../context/ChatAssistantContext';
+import { chatWithDataService } from '../../services/chatWithData.service';
 import type { ChatDataAnswer, ChatDataChart, ChatDataTable, ChatDataTableColumn } from '../../types';
 
 const CHART_COLORS = ['#0F766E', '#1D4ED8', '#B45309', '#BE123C', '#7C3AED', '#0E7490', '#4D7C0F', '#C2410C'];
@@ -181,6 +183,7 @@ function Chip({ children }: { children: ReactNode }) {
 
 function AnswerCard({
   answer,
+  question,
   onOption,
   disabled,
   latest,
@@ -189,6 +192,7 @@ function AnswerCard({
   pageError = null,
 }: {
   answer: ChatDataAnswer;
+  question?: string;
   onOption: (text: string) => void;
   disabled: boolean;
   latest: boolean;
@@ -196,10 +200,34 @@ function AnswerCard({
   paging?: boolean;
   pageError?: string | null;
 }) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const pagination = answer.status === 'answer' ? answer.pagination : null;
   const badge = STATUS_STYLE[answer.status];
   const showFacts = answer.status === 'answer' && answer.facts.length > 0;
   const filterEntries = Object.entries(answer.filters || {});
+  const canExport =
+    answer.status === 'answer' &&
+    Boolean(
+      (answer.table && answer.table.rows.length > 0) ||
+        answer.facts.length > 0 ||
+        (answer.chart && answer.chart.points.length > 0),
+    );
+
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await chatWithDataService.exportExcel(answer, question);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Excel export failed.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -212,28 +240,73 @@ function AnswerCard({
         boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
       }}
     >
-      {badge && (
-        <div
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '2px 10px',
-            borderRadius: 999,
-            fontSize: '0.75rem',
-            fontWeight: 600,
-            color: badge.color,
-            background: badge.background,
-            marginBottom: 8,
-          }}
-        >
-          <badge.Icon size={14} aria-hidden />
-          {badge.label}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {badge && (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '2px 10px',
+                borderRadius: 999,
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                color: badge.color,
+                background: badge.background,
+                marginBottom: 8,
+              }}
+            >
+              <badge.Icon size={14} aria-hidden />
+              {badge.label}
+            </div>
+          )}
+          <p style={{ margin: 0, fontSize: '0.9rem', lineHeight: 1.6, color: TEXT, whiteSpace: 'pre-line' }}>
+            {answer.message}
+          </p>
+        </div>
+
+        {canExport && (
+          <button
+            type="button"
+            onClick={() => void handleExport()}
+            disabled={exporting}
+            title="Download this response as an Excel (.xlsx) file"
+            aria-label="Download Excel"
+            style={{
+              flexShrink: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '5px 10px',
+              borderRadius: 8,
+              border: `1px solid ${BORDER}`,
+              background: exporting ? '#F8FAFC' : 'white',
+              color: exporting ? TEXT_SECONDARY : TEAL,
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              cursor: exporting ? 'wait' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Download size={13} aria-hidden />
+            {exporting ? 'Exporting…' : 'Excel'}
+          </button>
+        )}
+      </div>
+
+      {exportError && (
+        <div role="alert" style={{ marginTop: 6, fontSize: '0.75rem', color: RED }}>
+          {exportError}
         </div>
       )}
-      <p style={{ margin: 0, fontSize: '0.9rem', lineHeight: 1.6, color: TEXT, whiteSpace: 'pre-line' }}>
-        {answer.message}
-      </p>
 
       {(answer.periods.length > 0 || filterEntries.length > 0) && answer.status === 'answer' && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
@@ -591,6 +664,11 @@ export function ChatWithDataPanel({
                 <div key={item.id} style={{ display: 'flex', justifyContent: 'flex-start' }}>
                   <AnswerCard
                     answer={item.answer}
+                    question={
+                      index > 0 && thread[index - 1]?.role === 'user'
+                        ? (thread[index - 1] as { role: 'user'; text: string }).text
+                        : undefined
+                    }
                     onOption={opt => void send(opt)}
                     disabled={loading}
                     latest={index === thread.length - 1}

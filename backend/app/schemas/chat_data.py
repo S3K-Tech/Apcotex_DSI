@@ -262,3 +262,18 @@ class ChatStatusResponse(BaseModel):
     semantic_search_enabled: bool = False
     max_question_chars: int = 500
     suggestions: List[str] = Field(default_factory=list)
+
+
+class ChatExportRequest(BaseModel):
+    """Payload to export a Chat with Data answer as an Excel (.xlsx) workbook."""
+
+    question: Optional[str] = Field(default=None, max_length=500)
+    message: str = ""
+    periods: List[str] = Field(default_factory=list)
+    filters: Dict[str, str] = Field(default_factory=dict)
+    facts: List[ChatFact] = Field(default_factory=list)
+    table: Optional[ChatTable] = None
+    chart: Optional[ChatChart] = None
+    pagination: Optional[ChatPagination] = None
+    spec: Optional[QuerySpec] = None
+
