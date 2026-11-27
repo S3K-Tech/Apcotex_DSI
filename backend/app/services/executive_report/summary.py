@@ -132,6 +132,9 @@ QUALITY GATE BEFORE YOU ANSWER
 Confirm silently that: every number you wrote appears in the brief; every named entity appears in the brief; no section exceeds its paragraph/bullet limits; the whole summary is between 450 and 750 words; negative_observations is candid; closing_summary has exactly four labelled bullets; the response is valid JSON matching the required shape. Then return only that JSON."""
 
 
+
+
+
 class ExecutiveSummaryError(AppException):
     """The LLM could not produce a usable executive summary."""
 
